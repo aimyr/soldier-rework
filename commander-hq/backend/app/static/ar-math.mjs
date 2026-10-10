@@ -91,6 +91,34 @@ export function cameraBasis({headingDeg, pitchDeg = 0, rollDeg = 0} = {}) {
   };
 }
 
+/**
+ * Aim the physical camera at a visible participant, then align that GPS point
+ * with the viewport centre. pose must already include the current offsets.
+ * Returns replacement offsets, not an additional correction; roll is unchanged.
+ * Yaw wraps to [-180, 180). Rejects range < 2 m, target / camera elevations
+ * within 5 degrees of vertical, and pitch corrections outside [-90, 90].
+ * Rejection returns null instead of silently clipping an incomplete alignment.
+ */
+export function alignmentCorrection(relative, pose, existingOffsets = {}) {
+  if (!relative || !pose || !existingOffsets) return null;
+  const {east, north, up} = relative;
+  const {headingDeg, pitchDeg} = pose;
+  const {yawDeg = 0, pitchDeg: offsetPitchDeg = 0} = existingOffsets;
+  if (![east, north, up, headingDeg, pitchDeg, yawDeg, offsetPitchDeg].every(finite)) return null;
+  const horizontal = Math.hypot(east, north);
+  const distance = Math.hypot(horizontal, up);
+  if (!finite(distance) || distance < 2 || Math.abs(pitchDeg) >= 85) return null;
+  const targetPitchDeg = Math.atan2(up, horizontal) * RAD;
+  if (Math.abs(targetPitchDeg) >= 85) return null;
+  const signedAngle = (value) => ((value + 180) % 360 + 360) % 360 - 180;
+  const targetHeadingDeg = Math.atan2(east, north) * RAD;
+  const nextYawDeg = signedAngle(signedAngle(yawDeg)
+    + signedAngle(targetHeadingDeg - normalizeHeading(headingDeg)));
+  const nextPitchDeg = offsetPitchDeg + targetPitchDeg - pitchDeg;
+  if (!finite(nextPitchDeg) || Math.abs(nextPitchDeg) > 90) return null;
+  return {yawDeg: nextYawDeg, pitchDeg: nextPitchDeg};
+}
+
 function viewportFields({width, height, horizontalFovDeg = 65, near = 0.25} = {}) {
   if (![width, height, horizontalFovDeg, near].every(finite)
     || width <= 0 || height <= 0 || horizontalFovDeg <= 0 || horizontalFovDeg >= 180 || near <= 0) return null;

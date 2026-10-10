@@ -119,9 +119,16 @@ async function pageIn(ctx, mock = {}) {
           if (method === 'beginPath') this.__smokePath = [];
           if (method === 'moveTo' || method === 'lineTo') this.__smokePath?.push([args[0], args[1]]);
           if (method === 'stroke' && this.__smokePath?.length) {
-            const xs = this.__smokePath.map(p => p[0]), ys = this.__smokePath.map(p => p[1]);
+            const transform = this.getTransform(), ratio = Math.min(devicePixelRatio || 1, 2);
+            const points = this.__smokePath.map(([x, y]) => [
+              (transform.a * x + transform.c * y + transform.e) / ratio,
+              (transform.b * x + transform.d * y + transform.f) / ratio,
+            ]);
+            const xs = points.map(p => p[0]), ys = points.map(p => p[1]);
             state.cubes.push({width: Math.max(...xs) - Math.min(...xs),
-              height: Math.max(...ys) - Math.min(...ys), points: this.__smokePath.length});
+              height: Math.max(...ys) - Math.min(...ys), points: this.__smokePath.length,
+              centerX: (Math.max(...xs) + Math.min(...xs)) / 2,
+              centerY: (Math.max(...ys) + Math.min(...ys)) / 2});
           }
         }
         return original.apply(this, args);
@@ -143,12 +150,16 @@ async function pageIn(ctx, mock = {}) {
 async function filterParticipants(ctx, ids) {
   // Keep repeat runs isolated from other phones already sharing this backend.
   // POST requests still reach the real GPS store; only the displayed snapshot is filtered.
+  const control = {staleIds: new Set()};
   await ctx.route('**/api/gps', async route => {
     if (route.request().method() !== 'GET') return route.continue();
     const response = await route.fetch();
     const snapshot = await response.json();
-    await route.fulfill({response, json: {...snapshot, devices: snapshot.devices.filter(d => ids.includes(d.device_id))}});
+    const devices = snapshot.devices.filter(d => ids.includes(d.device_id)).map(device =>
+      control.staleIds.has(device.device_id) ? {...device, stale: true, fix_age_s: 60} : device);
+    await route.fulfill({response, json: {...snapshot, devices}});
   });
+  return control;
 }
 
 async function begin(page, id, alpha = 0, absolute = true) {
@@ -161,6 +172,22 @@ async function begin(page, id, alpha = 0, absolute = true) {
 const count = page => page.locator('#count').textContent();
 const uploads = page => page.__gpsRequests.filter(r => r.method === 'POST').length;
 const rows = async page => (await (await page.request.get(`${base}/api/gps`)).json()).devices;
+const offsets = page => page.evaluate(() => ({yaw: Number(document.getElementById('yaw').value),
+  pitch: Number(document.getElementById('pitch').value)}));
+const cubeCenter = page => page.evaluate(() => window.__arSmoke.cubes[0]);
+
+async function assertCentered(page, description) {
+  await eventually(() => page.evaluate(() => {
+    const canvas = document.getElementById('overlay'), video = document.getElementById('camera');
+    const box = canvas.getBoundingClientRect();
+    const scale = Math.min(box.width / video.videoWidth, box.height / video.videoHeight);
+    const width = video.videoWidth * scale, height = video.videoHeight * scale;
+    const cameraCenter = {x: (box.width - width) / 2 + width / 2,
+      y: (box.height - height) / 2 + height / 2};
+    const cube = window.__arSmoke.cubes[0];
+    return cube ? {dx: cube.centerX - cameraCenter.x, dy: cube.centerY - cameraCenter.y} : null;
+  }), difference => difference && Math.abs(difference.dx) < 1 && Math.abs(difference.dy) < 1, description);
+}
 
 try {
   await mkdir(screenshots, {recursive: true});
@@ -180,13 +207,16 @@ try {
     if (label === 'mobile') {
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Mobile page has no horizontal overflow');
     }
+    await page.locator('#alignment-target').selectOption('Robin');
+    assert.equal(await page.locator('#align-target-camera').isVisible(), true, 'Selected participant exposes the camera alignment button');
+    assert.equal(await page.locator('#align-target-camera').isDisabled(), false);
     await page.screenshot({path: join(screenshots, filename), fullPage: true});
     await ctx.close();
     console.log(`PASS ${label} demo: three shrinking cubes, zero GPS/camera calls, screenshot saved`);
   }
 
   const ctxA = await context(), ctxB = await context();
-  await filterParticipants(ctxA, ['Browser-A', 'Browser-B']);
+  const snapshotA = await filterParticipants(ctxA, ['Browser-A', 'Browser-B']);
   await filterParticipants(ctxB, ['Browser-A', 'Browser-B']);
   const pageA = await pageIn(ctxA), pageB = await pageIn(ctxB, {lat: northLatitude(20)});
   await begin(pageA, 'Browser-A', 0);
@@ -223,6 +253,52 @@ try {
   assert.match(await pageA.locator('#heading').textContent(), /^0° · absolute$/);
   console.log('PASS stationary phones: orientation persists beyond 3 s and GPS refresh persists beyond 10 s');
 
+  assert.equal(await pageA.locator('#alignment-target').inputValue(), '');
+  assert.equal(await pageA.locator('#align-target').isDisabled(), true, 'Alignment requires a selected participant');
+  assert.equal(await pageA.locator('#align-target-camera').isVisible(), false);
+  // The camera is physically aimed at B, but its sensors report a 20° yaw and
+  // -10° pitch error. Alignment must move the actual rendered cube to the +.
+  await pageA.evaluate(() => window.__arSmoke.orient(340, true, {beta: 80}));
+  await eventually(() => pageA.locator('#heading').textContent(), value => value === '20° · absolute', 'Biased sensor heading is applied');
+  const biasedCube = await cubeCenter(pageA);
+  await pageA.locator('#alignment-target').selectOption('Browser-B');
+  await eventually(() => pageA.locator('#align-target').isDisabled(), disabled => !disabled, 'Fresh selected participant allows alignment');
+  assert.equal(await pageA.locator('#align-target-camera').isVisible(), true);
+  assert.equal(await pageA.locator('#align-target-camera').isDisabled(), false);
+  await pageA.locator('#align-target').click();
+  assert.deepEqual(await offsets(pageA), {yaw: -20, pitch: 10});
+  await assertCentered(pageA, 'Align-to-participant centers the rendered cube in the camera rectangle');
+  const centeredCube = await cubeCenter(pageA);
+  assert.ok(Math.abs(biasedCube.centerX - centeredCube.centerX) > 100, 'Yaw alignment corrects a visible horizontal error');
+  assert.ok(Math.abs(biasedCube.centerY - centeredCube.centerY) > 50, 'Pitch alignment corrects a visible vertical error');
+  await eventually(() => rows(pageA), devices => devices.some(d => d.device_id === 'Browser-A'
+    && Math.abs(d.camera_heading_deg) < 0.1 && Math.abs(d.camera_pitch_deg) < 0.1), 'Alignment publishes the corrected pose without a new sensor event');
+  for (const [direction, axis, sign] of [['left', 'centerX', -1], ['right', 'centerX', 1],
+    ['up', 'centerY', -1], ['down', 'centerY', 1]]) {
+    const before = await cubeCenter(pageA);
+    await pageA.locator(`[data-nudge="${direction}"]`).click();
+    await eventually(() => cubeCenter(pageA), after => after && sign * (after[axis] - before[axis]) > 2,
+      `${direction} fine arrow moves the rendered cube in its labelled screen direction`);
+  }
+  await pageA.locator('#reset-alignment').click();
+  assert.deepEqual(await offsets(pageA), {yaw: 0, pitch: 0});
+  await eventually(() => rows(pageA), devices => devices.some(d => d.device_id === 'Browser-A'
+    && Math.abs(d.camera_heading_deg - 20) < 0.1 && Math.abs(d.camera_pitch_deg + 10) < 0.1), 'Reset publishes the uncorrected pose without a new sensor event');
+  await pageA.locator('#align-target-camera').click();
+  await assertCentered(pageA, 'A second alignment replaces the previous correction');
+  snapshotA.staleIds.add('Browser-B');
+  await eventually(() => pageA.locator('#align-target').isDisabled(), disabled => disabled, 'A stale selected participant disables alignment');
+  assert.equal(await pageA.locator('#align-target-camera').isDisabled(), true);
+  assert.equal(await pageA.locator('#alignment-target').inputValue(), 'Browser-B', 'Stale selection remains identifiable');
+  assert.equal(await pageA.locator('#alignment-target option[value="Browser-B"]').evaluate(option => option.disabled), true);
+  snapshotA.staleIds.clear();
+  await eventually(() => pageA.locator('#align-target').isDisabled(), disabled => !disabled, 'Fresh GPS restores selected participant alignment');
+  await pageA.locator('#alignment-target').selectOption('');
+  assert.equal(await pageA.locator('#align-target').isDisabled(), true);
+  assert.equal(await pageA.locator('#align-target-camera').isVisible(), false);
+  await pageA.locator('#reset-alignment').click();
+  console.log('PASS participant alignment: rendered center, yaw/pitch correction, all four arrows, reset telemetry, stale/unselected controls');
+
   await pageA.evaluate(() => window.__arSmoke.orient(180));
   await eventually(() => count(pageA), value => value === '0 in view', 'Turning away removes the target');
   await pageA.evaluate(() => window.__arSmoke.nullOrientation());
@@ -246,11 +322,35 @@ try {
   assert.equal(await denied.evaluate(() => window.__arSmoke.watchCalls), 0);
   console.log('PASS camera permission denied: visible error, no location watch or uploads');
 
+  // Resume the second real phone so the relative-sensor calibration has a fresh
+  // participant reference throughout the test, independent of previous timing.
+  await begin(pageB, 'Browser-B', 180);
   const relativeCtx = await context();
   await filterParticipants(relativeCtx, ['Browser-A', 'Browser-B', 'Browser-relative']);
   const relative = await pageIn(relativeCtx);
-  await begin(relative, 'Browser-relative', 0, false);
+  await begin(relative, 'Browser-relative', 340, false);
   await eventually(() => relative.locator('#heading').textContent(), value => value === 'Heading —', 'Relative orientation requires calibration');
+  await eventually(() => relative.locator('#alignment-target option[value="Browser-B"]').count(), value => value === 1, 'Fresh reference phone is available to relative sensors');
+  assert.equal(await relative.locator('#align-target').isDisabled(), true, 'Relative alignment also requires a selected phone');
+  await relative.locator('#alignment-target').selectOption('Browser-B');
+  await eventually(() => relative.locator('#align-target').isDisabled(), disabled => !disabled, 'Relative orientation supports participant calibration');
+  await relative.locator('#align-target').click();
+  assert.deepEqual(await offsets(relative), {yaw: -20, pitch: 0});
+  await assertCentered(relative, 'Participant alignment centers the cube with no absolute heading sensor');
+  await eventually(() => rows(relative), devices => devices.some(d => d.device_id === 'Browser-relative'
+    && d.camera_heading_deg === 0 && d.orientation_source === 'calibrated'), 'Participant alignment establishes and publishes a calibrated north frame');
+  await relative.waitForTimeout(600);
+  await relative.evaluate(() => window.__arSmoke.orient(250, false));
+  await eventually(() => relative.locator('#heading').textContent(), value => value === '90° · calibrated', 'Participant calibration follows subsequent relative rotation');
+  await relative.locator('#reset-alignment').click();
+  assert.deepEqual(await offsets(relative), {yaw: 0, pitch: 0});
+  await eventually(() => relative.locator('#heading').textContent(), value => value === 'Heading —', 'Reset removes a participant-created relative north frame');
+  await relative.waitForTimeout(600);
+  await relative.evaluate(() => window.__arSmoke.orient(0, false));
+  console.log('PASS relative participant alignment: calibrated north, rendered cube center, following turns, reset removes north frame');
+
+  // Keep the separate known-direction workflow covered after clearing the
+  // participant calibration, so one path cannot mask a defect in the other.
   await relative.locator('#settings').evaluate(node => { node.open = true; });
   await relative.locator('#known-heading').fill('0');
   await relative.locator('#calibrate').click();
@@ -260,6 +360,7 @@ try {
   await relative.evaluate(() => window.__arSmoke.orient(270, false));
   await eventually(() => relative.locator('#heading').textContent(), value => value === '90° · calibrated', 'Calibration offset follows rotation rather than freezing heading');
   await relative.locator('#start').click();
+  await pageB.locator('#start').click();
   console.log('PASS relative sensors: known-direction calibration publishes north and follows a 90° rotation');
 
   assert.deepEqual(pageErrors, [], 'No unhandled browser runtime errors');
@@ -274,6 +375,10 @@ try {
         count: document.getElementById('count')?.textContent,
         status: document.getElementById('status')?.textContent,
         nearby: document.getElementById('nearby')?.textContent,
+        alignment: document.getElementById('alignment-message')?.textContent,
+        alignmentTarget: document.getElementById('alignment-target')?.value,
+        yaw: document.getElementById('yaw')?.value, pitch: document.getElementById('pitch')?.value,
+        cubes: window.__arSmoke?.cubes,
         hidden: document.hidden,
         gps: document.getElementById('gps')?.textContent,
         calls: window.__arSmoke && {watch: window.__arSmoke.watchCalls, current: window.__arSmoke.currentCalls,

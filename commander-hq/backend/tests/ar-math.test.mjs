@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {relativePosition, cameraBasis, projectPoint, cubeSegments, orientationFromEvent} from '../app/static/ar-math.mjs';
+import {relativePosition, cameraBasis, projectPoint, cubeSegments, orientationFromEvent, alignmentCorrection} from '../app/static/ar-math.mjs';
 
 const close = (actual, expected, epsilon = 1e-8) => assert.ok(Math.abs(actual - expected) <= epsilon, `${actual} != ${expected}`);
 const vectorClose = (actual, expected, epsilon) => actual.forEach((value, index) => close(value, expected[index], epsilon));
@@ -93,6 +93,74 @@ test('camera pitch and roll change projection consistently', () => {
   const east = projectPoint([2, 10, 0], rolled, view);
   close(east.x, 400);
   assert.ok(east.y > 300);
+});
+
+test('participant alignment centres its actual projection and preserves tilted camera roll', () => {
+  const relative = {east: 12, north: 20, up: 7};
+  const sensorPose = {headingDeg: 12, pitchDeg: -8, rollDeg: 37};
+  const offsets = {yawDeg: -15, pitchDeg: 9};
+  const currentPose = {...sensorPose,
+    headingDeg: sensorPose.headingDeg + offsets.yawDeg,
+    pitchDeg: sensorPose.pitchDeg + offsets.pitchDeg};
+  const before = projectPoint(relative, cameraBasis(currentPose), view);
+  assert.ok(Math.abs(before.x - 400) > 10 || Math.abs(before.y - 300) > 10);
+  const correction = alignmentCorrection(relative, currentPose, offsets);
+  assert.ok(correction);
+  const aligned = projectPoint(relative, cameraBasis({...sensorPose,
+    headingDeg: sensorPose.headingDeg + correction.yawDeg,
+    pitchDeg: sensorPose.pitchDeg + correction.pitchDeg}), view);
+  close(aligned.x, 400);
+  close(aligned.y, 300);
+  close(aligned.depth, Math.hypot(relative.east, relative.north, relative.up));
+});
+
+test('alignment crosses north using the shortest yaw and wraps replacement offsets', () => {
+  const atBearing = (degrees) => ({east: 20 * Math.sin(degrees * Math.PI / 180),
+    north: 20 * Math.cos(degrees * Math.PI / 180), up: 0});
+  close(alignmentCorrection(atBearing(1), {headingDeg: 359, pitchDeg: 0}).yawDeg, 2);
+  close(alignmentCorrection(atBearing(359), {headingDeg: 1, pitchDeg: 0}).yawDeg, -2);
+  close(alignmentCorrection(atBearing(5), {headingDeg: 350, pitchDeg: 0}, {yawDeg: 175}).yawDeg, -170);
+  close(alignmentCorrection(atBearing(180), {headingDeg: 0, pitchDeg: 0}).yawDeg, -180);
+});
+
+test('alignment replaces existing offsets and repeated calibration does not accumulate drift', () => {
+  const relative = {east: 15, north: 20, up: 4};
+  const raw = {headingDeg: 80, pitchDeg: 10};
+  const first = alignmentCorrection(relative, {headingDeg: 100, pitchDeg: 15}, {yawDeg: 20, pitchDeg: 5});
+  const after = {headingDeg: raw.headingDeg + first.yawDeg, pitchDeg: raw.pitchDeg + first.pitchDeg};
+  const second = alignmentCorrection(relative, after, first);
+  close(second.yawDeg, first.yawDeg);
+  close(second.pitchDeg, first.pitchDeg);
+  const center = projectPoint(relative, cameraBasis(after), view);
+  close(center.x, 400);
+  close(center.y, 300);
+});
+
+test('alignment rejects invalid, too close, or near-vertical inputs', () => {
+  const relative = {east: 0, north: 10, up: 0};
+  const pose = {headingDeg: 0, pitchDeg: 0};
+  for (const bad of [null, {}, {...relative, east: NaN}, {...relative, north: Infinity}, {...relative, up: null},
+    {east: 0, north: 1.99, up: 0}, {east: 0, north: 0, up: 10}, {east: 0, north: 0.01, up: -10},
+    {east: Number.MAX_VALUE, north: Number.MAX_VALUE, up: Number.MAX_VALUE}]) {
+    assert.equal(alignmentCorrection(bad, pose), null);
+  }
+  assert.deepEqual(alignmentCorrection({east: 0, north: 2, up: 0}, pose), {yawDeg: 0, pitchDeg: 0});
+  for (const bad of [null, {}, {...pose, headingDeg: null}, {...pose, pitchDeg: NaN},
+    {...pose, pitchDeg: 85}, {...pose, pitchDeg: -85}, {...pose, pitchDeg: 100}]) {
+    assert.equal(alignmentCorrection(relative, bad), null);
+  }
+  for (const bad of [null, {yawDeg: Infinity}, {pitchDeg: null}, {pitchDeg: NaN}]) {
+    assert.equal(alignmentCorrection(relative, pose, bad), null);
+  }
+});
+
+test('alignment never silently clamps an out-of-range pitch correction', () => {
+  const relative = {east: 0, north: 10, up: 10};
+  const pose = {headingDeg: 0, pitchDeg: 0};
+  assert.equal(alignmentCorrection(relative, pose, {pitchDeg: 46}), null);
+  assert.equal(alignmentCorrection({...relative, up: -10}, pose, {pitchDeg: -46}), null);
+  close(alignmentCorrection(relative, pose, {pitchDeg: 45}).pitchDeg, 90);
+  close(alignmentCorrection({...relative, up: -10}, pose, {pitchDeg: -45}).pitchDeg, -90);
 });
 
 test('projection rejects invalid viewport, unknown heading and points before near plane', () => {

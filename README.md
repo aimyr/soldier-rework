@@ -19,6 +19,8 @@ Connect phones and laptop to the same Wi-Fi or hotspot. The launcher prints `htt
 
 Height is used when both phones provide an altitude with a matching reference and acceptable vertical accuracy (15 m by default). Missing or noisy height falls back to a flat position; settings include a manual altitude correction. GPS and compass errors still affect marker placement. This is approximate GPS AR, with no person recognition, surface tracking or wall occlusion.
 
+On the viewing phone, **Калибровка по человеку** lets you select a participant, aim the central crosshair at them and press **Совместить**. This aligns the GPS cube by adjusting camera heading and tilt. Arrow buttons provide fine adjustments; **Сбросить поправку** clears them. Repeat when GPS drifts or after changing location. Alignment does not improve either phone's GPS coordinates.
+
 See [phone setup, certificate trust, calibration and tests](commander-hq/README.md#phone-ar-and-gps-sharing).
 
 ## Original Squad HUD projects

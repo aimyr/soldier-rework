@@ -1,4 +1,4 @@
-import {relativePosition, cameraBasis, projectPoint, cubeSegments, orientationFromEvent} from './ar-math.mjs';
+import {relativePosition, cameraBasis, projectPoint, cubeSegments, orientationFromEvent, alignmentCorrection} from './ar-math.mjs?v=alignment-1';
 
 const $ = id => document.getElementById(id);
 const video = $('camera'), canvas = $('overlay'), ctx = canvas.getContext('2d');
@@ -14,6 +14,7 @@ let ownFix = null, ownFixReceivedAt = 0, pose = null, poseAt = 0, lastEvent = nu
 let calibrationOffset = null, webkitOffset = null, webkitOffsetAt = 0, devices = [], uploadBusy = false, pollBusy = false, fixRequestBusy = false;
 let manualFov = false;
 let networkMessage = '', sensorMessage = '', cameraWarning = '', lastHud = 0;
+let alignmentChoices = '', targetRelativeCalibration = false;
 const requests = new Set();
 
 function persistentId() {
@@ -33,11 +34,13 @@ function status(message, error = false) {
   $('status').classList.toggle('error', error);
 }
 function currentPose() {
-  if (mode === 'demo') return {headingDeg: wrap(number('demo-yaw', 0, -180, 180)), pitchDeg: number('demo-pitch', 0, -60, 60), rollDeg: 0, source: 'demo'};
+  const raw = mode === 'demo' ? {headingDeg: wrap(number('demo-yaw', 0, -180, 180)),
+    pitchDeg: number('demo-pitch', 0, -60, 60), rollDeg: 0, source: 'demo'} : pose;
   // Orientation events are change notifications, not periodic sensor heartbeats.
   // A stationary pose stays valid until null data, page hiding or Stop.
-  if (!pose || !finite(pose.headingDeg)) return null;
-  return {...pose, headingDeg: wrap(pose.headingDeg + number('yaw', 0, -180, 180))};
+  if (!raw || !finite(raw.headingDeg)) return null;
+  return {...raw, headingDeg: wrap(raw.headingDeg + number('yaw', 0, -180, 180)),
+    pitchDeg: Math.max(-90, Math.min(90, raw.pitchDeg + number('pitch', 0, -90, 90)))};
 }
 function fixFresh() {
   return ownFix && Date.now() - ownFixReceivedAt < 10000 && Date.now() - ownFix.fix_unix_ms < 10000;
@@ -134,7 +137,9 @@ function relative(target) {
 function updateNearby() {
   const list = $('nearby');
   list.replaceChildren();
-  for (const target of targets().sort((a, b) => relative(a).distanceM - relative(b).distanceM)) {
+  const nearby = targets().sort((a, b) => relative(a).distanceM - relative(b).distanceM);
+  updateAlignmentTargets(nearby);
+  for (const target of nearby) {
     const p = relative(target), card = document.createElement('div');
     card.className = 'participant';
     const icon = document.createElement('i'), name = document.createElement('strong'), text = document.createElement('span');
@@ -142,6 +147,92 @@ function updateNearby() {
     text.textContent = `${Math.round(p.distanceM)} m · ±${Math.round(target.accuracy_m ?? 0)} m${p.altitudeUsed ? ` · Δh ${p.up >= 0 ? '+' : ''}${p.up.toFixed(1)} m` : ' · flat height'}`;
     card.append(icon, name, text); list.append(card);
   }
+}
+function alignmentPose() {
+  if (currentPose()) return currentPose();
+  // A visual reference can supply north alignment when the phone only has
+  // relative orientation. The captured alpha still follows subsequent turns.
+  if (mode === 'live' && pose && finite(pose.relativeAlphaDeg)) {
+    return {...pose, headingDeg: wrap(pose.relativeAlphaDeg + number('yaw', 0, -180, 180)),
+      pitchDeg: Math.max(-90, Math.min(90, pose.pitchDeg + number('pitch', 0, -90, 90)))};
+  }
+  return null;
+}
+function updateAlignmentTargets(nearby = targets()) {
+  const picker = $('alignment-target'), selected = picker.value;
+  const eligible = nearby.filter(target => {
+    const distance = relative(target).distanceM;
+    return distance >= 2 && distance <= 2000;
+  });
+  const ids = eligible.map(target => target.device_id).sort();
+  const key = JSON.stringify([ids, selected && !ids.includes(selected) ? selected : '']);
+  if (key !== alignmentChoices) {
+    picker.replaceChildren(new Option('Выбери телефон', ''));
+    for (const id of ids) picker.add(new Option(id, id));
+    if (selected && !ids.includes(selected)) {
+      const missing = new Option(`${selected} — нет свежего GPS`, selected);
+      missing.disabled = true; picker.add(missing);
+    }
+    picker.value = selected;
+    alignmentChoices = key;
+  }
+  const target = eligible.find(device => device.device_id === picker.value);
+  const ready = (mode === 'demo' || (mode === 'live' && fixFresh())) && Boolean(alignmentPose());
+  $('align-target').disabled = !target || !ready;
+  $('align-target-camera').disabled = !target || !ready;
+  $('align-target-camera').hidden = !selected || (mode !== 'live' && mode !== 'demo');
+  $('align-target-camera').textContent = selected ? `Совместить с ${selected}` : 'Совместить';
+  document.querySelectorAll('[data-nudge]').forEach(button => { button.disabled = !ready || !currentPose(); });
+  if (mode !== 'live' && mode !== 'demo') {
+    $('alignment-quality').textContent = 'Сначала включи камеру и GPS. У участника должна быть открыта страница GPS или AR.';
+  } else if (!ready) {
+    $('alignment-quality').textContent = 'Ждём свежий GPS и датчики движения на этом телефоне.';
+  } else if (target) {
+    const p = relative(target);
+    $('alignment-quality').textContent = `${target.device_id}: ${Math.round(p.distanceM)} м. GPS здесь ±${Math.round(ownFix.accuracy_m)} м, у участника ±${Math.round(target.accuracy_m ?? 0)} м. При движении или дрейфе GPS повтори совмещение.`;
+  } else {
+    $('alignment-quality').textContent = selected ? 'У выбранного телефона нет свежего GPS или он слишком близко. Дождись обновления.' : 'Выбери телефон участника со свежим GPS. Для первого совмещения отойдите хотя бы на 10–20 метров.';
+  }
+}
+function setAlignment(yawDeg, pitchDeg) {
+  $('yaw').value = String(Math.round(angleDelta(yawDeg, 0) * 10) / 10);
+  $('pitch').value = String(Math.round(Math.max(-90, Math.min(90, pitchDeg)) * 10) / 10);
+  for (const id of ['yaw', 'pitch']) $(id).dispatchEvent(new Event('input'));
+  if (mode === 'live') upload();
+}
+function alignTarget() {
+  const target = targets().find(device => device.device_id === $('alignment-target').value);
+  const camera = alignmentPose();
+  if (!target || !camera || (mode !== 'demo' && !fixFresh())) {
+    $('alignment-message').textContent = 'Для совмещения нужны свежие координаты обоих телефонов и датчики движения.';
+    return;
+  }
+  const correction = alignmentCorrection(relative(target), camera,
+    {yawDeg: number('yaw', 0, -180, 180), pitchDeg: number('pitch', 0, -90, 90)});
+  if (!correction) {
+    $('alignment-message').textContent = 'Отойдите дальше 2 метров, держи камеру ближе к горизонту и попробуй ещё раз. При большой вертикальной поправке сначала нажми «Сбросить поправку».';
+    return;
+  }
+  if (mode === 'live' && !currentPose()) {
+    calibrationOffset = 0; targetRelativeCalibration = true;
+    pose = {...pose, headingDeg: pose.relativeAlphaDeg, source: 'calibrated'};
+  }
+  setAlignment(correction.yawDeg, correction.pitchDeg);
+  $('alignment-message').textContent = `Совмещено с ${target.device_id}. Поправка направления ${$('yaw').value}°, наклона ${$('pitch').value}°. Она действует на все кубы; GPS может снова сместиться.`;
+}
+function nudge(direction) {
+  const camera = currentPose();
+  if (!camera) return;
+  // Move the cubes in screen directions, including a rolled camera. Heading
+  // sensitivity falls with pitch, so account for it near the horizon.
+  const roll = camera.rollDeg * Math.PI / 180;
+  const [x, y] = {left: [-0.5, 0], right: [0.5, 0], up: [0, -0.5], down: [0, 0.5]}[direction];
+  const eastShift = x * Math.cos(roll) + y * Math.sin(roll);
+  const upShift = x * Math.sin(roll) - y * Math.cos(roll);
+  const yaw = number('yaw', 0, -180, 180) - eastShift / Math.max(0.1, Math.cos(camera.pitchDeg * Math.PI / 180));
+  const pitch = number('pitch', 0, -90, 90) - upShift;
+  setAlignment(yaw, pitch);
+  $('alignment-message').textContent = `Ручная поправка: направление ${$('yaw').value}°, наклон ${$('pitch').value}°. Для повторного совмещения наведи + на человека.`;
 }
 function contentRect() {
   const box = canvas.getBoundingClientRect();
@@ -209,14 +300,14 @@ function stop(message = 'Stopped. Camera and GPS sharing are off.') {
   window.removeEventListener('deviceorientationabsolute', onOrientation);
   if (animation !== null) cancelAnimationFrame(animation); animation = null;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ownFix = null; devices = []; pose = null; lastEvent = null; calibrationOffset = null; webkitOffset = null; webkitOffsetAt = 0;
+  ownFix = null; devices = []; pose = null; lastEvent = null; calibrationOffset = null; webkitOffset = null; webkitOffsetAt = 0; targetRelativeCalibration = false;
   networkMessage = ''; sensorMessage = ''; cameraWarning = ''; uploadBusy = false; pollBusy = false; fixRequestBusy = false;
   $('view').className = ''; $('welcome').hidden = false; $('demo-settings').hidden = true;
   $('device-id').disabled = false; $('start').disabled = false; $('demo').disabled = false;
   $('start').textContent = 'Start camera + GPS'; $('start').classList.remove('stop');
   $('mode').textContent = 'STANDBY'; $('count').textContent = '0 in view';
   $('heading').textContent = 'Heading —'; $('gps').textContent = 'GPS —'; $('height').textContent = 'Height —';
-  $('nearby').replaceChildren(); status(message);
+  $('nearby').replaceChildren(); updateAlignmentTargets([]); status(message);
 }
 function activate(nextMode) {
   mode = nextMode; $('view').className = nextMode; $('welcome').hidden = true;
@@ -316,6 +407,19 @@ function demo() {
   updateNearby();
 }
 $('start').addEventListener('click', start); $('demo').addEventListener('click', demo);
+$('alignment-target').addEventListener('change', () => updateAlignmentTargets());
+$('align-target').addEventListener('click', alignTarget);
+$('align-target-camera').addEventListener('click', alignTarget);
+$('reset-alignment').addEventListener('click', () => {
+  if (targetRelativeCalibration) {
+    calibrationOffset = null; targetRelativeCalibration = false;
+    if (lastEvent) { const event = lastEvent; pose = null; onOrientation(event); }
+  }
+  setAlignment(0, 0);
+  $('alignment-message').textContent = 'Поправка совмещения сброшена. Выбери участника и наведи + на него, чтобы совместить снова.';
+  updateAlignmentTargets();
+});
+document.querySelectorAll('[data-nudge]').forEach(button => button.addEventListener('click', () => nudge(button.dataset.nudge)));
 $('calibrate').addEventListener('click', () => {
   if (mode !== 'live' || !lastEvent) { status('Start on a phone and allow motion access before setting a direction.', true); return; }
   const known = number('known-heading', 0, 0, 359), raw = orientationFromEvent(lastEvent, screenAngle());
@@ -323,13 +427,20 @@ $('calibrate').addEventListener('click', () => {
   if (finite(raw.headingDeg)) {
     $('yaw').value = String(Math.round(angleDelta(known, raw.headingDeg))); $('yaw').dispatchEvent(new Event('input'));
   } else {
-    calibrationOffset = angleDelta(known, raw.relativeAlphaDeg); $('yaw').value = '0'; $('yaw').dispatchEvent(new Event('input'));
+    calibrationOffset = angleDelta(known, raw.relativeAlphaDeg); targetRelativeCalibration = false; $('yaw').value = '0'; $('yaw').dispatchEvent(new Event('input'));
   }
   pose = null; onOrientation(lastEvent);
   status('Direction set. Keep the phone away from magnets; repeat if markers drift.');
 });
-for (const [input, output] of [['fov', 'fov-value'], ['yaw', 'yaw-value'], ['demo-yaw', 'demo-yaw-value'], ['demo-pitch', 'demo-pitch-value']]) {
-  $(input).addEventListener('input', () => { $(output).textContent = `${$(input).value}°`; if (input === 'fov') manualFov = true; });
+for (const [input, output] of [['fov', 'fov-value'], ['yaw', 'yaw-value'], ['pitch', 'pitch-value'], ['demo-yaw', 'demo-yaw-value'], ['demo-pitch', 'demo-pitch-value']]) {
+  $(input).addEventListener('input', () => {
+    $(output).textContent = `${$(input).value}°`;
+    if (input === 'fov') manualFov = true;
+    // A manual correction changes the shared camera pose even if the physical
+    // phone is stationary and emits no further orientation events.
+    if (input === 'yaw' || input === 'pitch') poseAt = Math.max(Date.now(), poseAt + 1);
+  });
 }
+updateAlignmentTargets([]);
 document.addEventListener('visibilitychange', () => { if (document.hidden && mode !== 'idle') stop('Paused while the page is hidden. Start again to resume camera and GPS sharing.'); });
 window.addEventListener('pagehide', () => stop());

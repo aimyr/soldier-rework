@@ -1,8 +1,8 @@
 #pragma once
 #include <Arduino.h>
 
-// Pulse Sensor (아날로그) + PulseSensor Playground 방식 비트 검출.
-// sample()을 일정 주기(PULSE_PERIOD_US)로 호출해야 한다.
+// Analog Pulse Sensor with PulseSensor Playground-style beat detection.
+// Call sample() periodically at PULSE_PERIOD_US.
 class PulseSensor {
 public:
   explicit PulseSensor(uint8_t pin) : pin_(pin) {}
@@ -11,7 +11,7 @@ public:
   void sample();
 
   uint16_t raw() const { return raw_; }  // 12bit
-  uint16_t bpm() const { return bpm_; }  // 0 = 측정 불가
+  uint16_t bpm() const { return bpm_; }  // 0 = unavailable
   uint16_t ibiMs() const { return ibi_; }
 
 private:
@@ -23,7 +23,7 @@ private:
   uint16_t bpm_ = 0;
   uint16_t ibi_ = 600;
 
-  // 검출 상태 (신호는 10bit 스케일로 환산해서 처리)
+  // Detection state (the signal is normalized to a 10-bit scale).
   uint32_t sampleCounter_ = 0;
   uint32_t lastBeat_ = 0;
   int thresh_ = 512, peak_ = 512, trough_ = 512, amp_ = 100;

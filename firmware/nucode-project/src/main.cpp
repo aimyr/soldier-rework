@@ -3,6 +3,7 @@
 #include "config.h"
 #include "core/log.h"
 #include "core/periodic.h"
+#include "core/status_led.h"
 #include "comm/ble_link.h"
 #include "comm/serial_telemetry.h"
 #include "sensors/analog_sensors.h"
@@ -14,6 +15,8 @@ Imu imu;
 AnalogSensors analog;
 Gps gps;
 BleLink ble;
+StatusLed statusLed;
+uint32_t readyMs = 0;
 bool analogReady = false, bleReady = false;
 uint32_t sampleGaps = 0;
 VitalsPacket vitals{0, INT16_MIN, 0, 0};
@@ -21,11 +24,13 @@ Periodic imuTick(IMU_PERIOD_US), vitalsTick(VITALS_PERIOD_US);
 Periodic gpsTick(GPS_PERIOD_US), retryTick(IMU_RETRY_US), statusTick(1000000);
 }
 void setup() {
+  statusLed.begin();
   Serial.begin(SERIAL_DEBUG_BAUD);
   bleReady = ble.begin();
   analogReady = analog.begin();
   imu.begin();
   if (CFG_GPS) gps.begin();
+  readyMs = millis();
   LOG("[main] ready imu=%u analog=%u ble=%u\n", imu.ok(), analogReady, bleReady);
 }
 void loop() {
@@ -62,5 +67,14 @@ void loop() {
     if (bleReady) ble.sendStatus(packet);
     SerialTelemetry::print(packet);
   }
+  const uint32_t nowMs = millis();
+  const bool settled = (uint32_t)(nowMs - readyMs) >= 1000;
+  const bool analogStale = settled && (uint32_t)(nowMs - vitals.t_ms) >= 1000;
+  StatusLed::State ledState;
+  if (!bleReady || !analogReady || analogStale) ledState = StatusLed::State::Fatal;
+  else if (!imu.ok() || (settled && vitals.temp_c_x100 == INT16_MIN))
+    ledState = StatusLed::State::SensorFault;
+  else ledState = ble.connected() ? StatusLed::State::Connected : StatusLed::State::Ready;
+  statusLed.update(ledState, nowMs);
   delay(MAIN_IDLE_MS);
 }

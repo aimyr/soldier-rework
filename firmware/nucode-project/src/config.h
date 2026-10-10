@@ -1,13 +1,13 @@
 #pragma once
-// 보드/배선/주기 설정은 전부 여기서만 바꾼다.
+// Central configuration for board pins, wiring, and timing.
 
 #include <Arduino.h>
 
-// ---- 핀 ----
-// TMP36GT9Z (Vout) / Pulse Sensor (Signal) 아날로그 입력
+// ---- Pins ----
+// Analog inputs for TMP36GT9Z (Vout) and Pulse Sensor (Signal).
 constexpr uint8_t PIN_TMP36 = A0;
 constexpr uint8_t PIN_PULSE = A1;
-// GPS는 UART(Serial1): GPS TX -> 보드 RX, GPS RX -> 보드 TX (핀은 보드 variant의 Serial1 기준)
+// GPS UART (Serial1): GPS TX -> board RX, GPS RX -> board TX; pins follow the board variant.
 // IMU Qwiic: SDA=P0.26, SCL=P0.27, bounded I2cBus driver.
 
 // ---- GPS ----
@@ -17,15 +17,15 @@ static_assert(PIN_TMP36 != PIN_PULSE, "Analog sensors need separate pins");
 
 // ---- ADC ----
 constexpr uint8_t  ADC_BITS      = 12;
-constexpr uint16_t ADC_VREF_MV   = 3600;  // analogReference(AR_INTERNAL) 기본: 0.6V / (1/6) = 3.6V
+constexpr uint16_t ADC_VREF_MV   = 3600;  // analogReference(AR_INTERNAL): 0.6V / (1/6) = 3.6V full scale
 
 static_assert(ADC_BITS >= 10 && ADC_BITS <= 12, "Supported ADC resolution: 10..12");
 
-// ---- 샘플링 주기 (us) ----
-constexpr uint32_t PULSE_PERIOD_US = 2000;     // 500 Hz (비트 검출용)
+// ---- Sampling periods (us) ----
+constexpr uint32_t PULSE_PERIOD_US = 2000;     // 500 Hz (beat detection)
 constexpr uint32_t IMU_PERIOD_US   = 20000;    // 50 Hz
-constexpr uint32_t VITALS_PERIOD_US = 200000;  // 5 Hz (온도 + 심박 전송)
-constexpr uint32_t GPS_PERIOD_US    = 1000000; // 1 Hz (최신 GPS 값 전송)
+constexpr uint32_t VITALS_PERIOD_US = 200000;  // 5 Hz (temperature and pulse telemetry)
+constexpr uint32_t GPS_PERIOD_US    = 1000000; // 1 Hz (latest GPS telemetry)
 
 // ---- BLE ----
 constexpr char BLE_DEVICE_NAME[] = "NUCODE-HUD";
@@ -46,7 +46,7 @@ constexpr bool IMU_LOW_POWER = true;
 constexpr uint32_t GPS_STALE_MS = 3000;
 constexpr uint32_t IMU_RETRY_US = 2000000;
 
-// ---- 디버그 로그 (USB CDC Serial; GPS Serial1과 별개) ----
+// ---- Debug logging (USB CDC Serial; separate from GPS Serial1) ----
 constexpr uint32_t SERIAL_DEBUG_BAUD = 9600;
 #ifndef CFG_DEBUG
 #define CFG_DEBUG 1

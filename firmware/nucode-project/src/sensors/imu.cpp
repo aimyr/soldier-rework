@@ -10,7 +10,7 @@ constexpr uint8_t REG_CTRL2_G  = 0x11;
 constexpr uint8_t REG_CTRL3_C  = 0x12;
 constexpr uint8_t REG_CTRL6_C = 0x15;
 constexpr uint8_t REG_CTRL7_G = 0x16;
-constexpr uint8_t REG_OUTX_L_G = 0x22;  // gyro XYZ, 이어서 accel XYZ
+constexpr uint8_t REG_OUTX_L_G = 0x22;  // Gyro XYZ followed by accel XYZ
 
 I2cBus bus;
 bool readRegs(uint8_t addr, uint8_t reg, uint8_t* buf, uint8_t len) {

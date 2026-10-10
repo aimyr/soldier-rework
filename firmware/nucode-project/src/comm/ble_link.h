@@ -1,7 +1,7 @@
 #pragma once
 #include "protocol/packets.h"
 
-// 내장 BLE(nRF52840)로 센서 데이터를 notify 한다.
+// Send sensor notifications using the onboard nRF52840 BLE radio.
 class BleLink {
 public:
   bool begin();

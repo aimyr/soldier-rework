@@ -1,10 +1,10 @@
 #pragma once
 #include <stdint.h>
 
-// BLE로 전송하는 패킷 정의. 모든 값은 little-endian, 패딩 없음.
-// PC 쪽 파서(tools/ble_receiver.py)와 반드시 같이 수정할 것.
+// BLE packet definitions. All fields are little-endian, with no padding.
+// Keep these definitions synchronized with the PC decoder in tools/protocol.py.
 
-// IMU 패킷 (16 bytes)
+// IMU packet (16 bytes)
 //  accel: ±4 g  -> 0.122 mg/LSB,  gyro: ±500 dps -> 17.5 mdps/LSB
 struct __attribute__((packed)) ImuPacket {
   uint32_t t_ms;
@@ -12,26 +12,26 @@ struct __attribute__((packed)) ImuPacket {
   int16_t  gx, gy, gz;
 };
 
-// Vitals 패킷 (10 bytes)
+// Vitals packet (10 bytes)
 struct __attribute__((packed)) VitalsPacket {
   uint32_t t_ms;
   int16_t  temp_c_x100;  // Celsius * 100; INT16_MIN = invalid/not ready
-  uint16_t bpm;          // 0 = 측정 불가
+  uint16_t bpm;          // 0 = unavailable
   uint16_t pulse_raw;    // 0..4095 (12bit)
 };
 
 static_assert(sizeof(ImuPacket) == 16, "ImuPacket size");
 static_assert(sizeof(VitalsPacket) == 10, "VitalsPacket size");
 
-// GPS 패킷 (20 bytes), 1 Hz
+// GPS packet (20 bytes), 1 Hz
 struct __attribute__((packed)) GpsPacket {
   uint32_t t_ms;
-  int32_t  lat_e7;     // 위도 * 1e7 (남위 음수)
-  int32_t  lon_e7;     // 경도 * 1e7 (서경 음수)
-  int32_t  alt_cm;     // 해발고도 cm
-  uint16_t speed_cms;  // 지상속도 cm/s
-  uint8_t  fix;        // 0 = 미수신, 1 = 2D/3D fix
-  uint8_t  sats;       // 사용 위성 수
+  int32_t  lat_e7;     // Latitude * 1e7 (negative south)
+  int32_t  lon_e7;     // Longitude * 1e7 (negative west)
+  int32_t  alt_cm;     // Altitude above mean sea level, cm
+  uint16_t speed_cms;  // Ground speed, cm/s
+  uint8_t  fix;        // 0 = unavailable, 1 = valid fix
+  uint8_t  sats;       // Number of satellites used
 };
 static_assert(sizeof(GpsPacket) == 20, "GpsPacket size");
 

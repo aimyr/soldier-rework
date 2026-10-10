@@ -7,7 +7,7 @@ void PulseSensor::begin() {
 
 void PulseSensor::sample() {
   raw_ = analogRead(pin_);
-  const int sig = raw_ >> (ADC_BITS - 10);  // 10bit 스케일
+  const int sig = raw_ >> (ADC_BITS - 10);  // Normalize to a 10-bit scale.
 
   const uint32_t now = millis();
   // A long sampling gap invalidates the beat history; never invent samples.
@@ -59,7 +59,7 @@ void PulseSensor::sample() {
     trough_ = thresh_;
   }
 
-  // 2.5초 동안 비트 없으면 초기화
+  // Reset after 2.5 seconds without a detected beat.
   if (n > 2500) {
     thresh_ = peak_ = trough_ = 512;
     lastBeat_ = sampleCounter_;

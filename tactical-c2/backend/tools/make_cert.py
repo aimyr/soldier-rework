@@ -1,15 +1,16 @@
 """Create a self-signed TLS certificate so a phone on the same Wi-Fi/hotspot can use
 the browser Geolocation API (browsers only allow it on HTTPS or localhost).
 
-Usage:  python tools/make_cert.py            -> backend/certs/cert.pem, key.pem
-The certificate lists every IPv4 address of this laptop, so it stays valid when
-the phone connects via the laptop's LAN IP.
+Usage:  python tools/make_cert.py [IP ...]   -> backend/certs/cert.pem, key.pem
+The certificate lists the given IPs plus every IPv4 address of this laptop, so it
+stays valid when the phone connects via the laptop's hotspot/LAN IP.
 """
 from __future__ import annotations
 
 import datetime as dt
 import ipaddress
 import socket
+import sys
 from pathlib import Path
 
 from cryptography import x509
@@ -39,7 +40,7 @@ def local_ipv4() -> list[str]:
 def main() -> None:
     OUT.mkdir(exist_ok=True)
     key = ec.generate_private_key(ec.SECP256R1())
-    ips = local_ipv4()
+    ips = sorted(set(local_ipv4()) | set(sys.argv[1:]))
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "squad-c2.local")])
     now = dt.datetime.now(dt.timezone.utc)
     cert = (
@@ -58,10 +59,7 @@ def main() -> None:
         serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
     (OUT / "cert.pem").write_bytes(cert.public_bytes(serialization.Encoding.PEM))
     print("certificate written to", OUT)
-    print("phone URL(s):")
-    for ip in ips:
-        if ip != "127.0.0.1":
-            print(f"  https://{ip}:8443/gps")
+    print("certificate IPs:", ", ".join(ips))
 
 
 if __name__ == "__main__":

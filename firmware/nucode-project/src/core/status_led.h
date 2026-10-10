@@ -1,7 +1,7 @@
 #pragma once
 #include <stdint.h>
 
-// LED1: boot steady, fatal fast blink, otherwise 1/2/3 short pulses per 2s.
+// Onboard RGB: cyan boot, blue ready, green connected, red faults.
 // Driven by loop(), so a stopped loop cannot keep emitting a healthy heartbeat.
 class StatusLed {
 public:

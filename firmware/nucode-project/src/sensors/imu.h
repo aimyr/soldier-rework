@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #include "protocol/packets.h"
 
-// NU-IMU LSM6DS3TR-C, Qwiic I2C 0x6A/0x6B.
+// MPU6050, I2C 0x68/0x69.
 class Imu {
 public:
   bool begin();

@@ -2,7 +2,7 @@
 #include <Arduino.h>
 
 // Single-master, open-drain software I2C. A whole transaction has a deadline:
-// the bundled Wire implementation has unbounded TWIM waits on a stuck bus.
+// no transaction may stall sensor processing indefinitely.
 class I2cBus {
 public:
   void begin();

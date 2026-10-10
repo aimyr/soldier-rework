@@ -16,7 +16,7 @@ void acquire(void*) {
   PulseSensor pulse(PIN_PULSE);
   Tmp36 temperature(PIN_TMP36);
   analogReadResolution(ADC_BITS);
-  analogReference(AR_INTERNAL);
+  analogReference(AR_DEFAULT);
   pulse.begin(); temperature.begin();
   static_assert(uint64_t(PULSE_PERIOD_US) * configTICK_RATE_HZ >= 1000000,
                 "Sampling period must be at least one RTOS tick");
@@ -43,7 +43,7 @@ void acquire(void*) {
 bool AnalogSensors::begin() {
   readings = xQueueCreate(1, sizeof(Reading));
   if (!readings) return false;
-  if (xTaskCreate(acquire, "analog", 512, nullptr, 2, nullptr) != pdPASS) {
+  if (xTaskCreate(acquire, "analog", 1024, nullptr, 3, nullptr) != pdPASS) {
     vQueueDelete(readings); readings = nullptr; return false;
   }
   return true;

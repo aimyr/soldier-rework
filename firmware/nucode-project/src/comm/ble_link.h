@@ -1,7 +1,7 @@
 #pragma once
 #include "protocol/packets.h"
 
-// Send sensor notifications using the onboard nRF52840 BLE radio.
+// Send sensor notifications using the onboard RTL8720DF BLE radio.
 class BleLink {
 public:
   bool begin();

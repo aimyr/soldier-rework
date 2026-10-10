@@ -1,8 +1,3 @@
 #!/bin/sh
-set -eu
-cd "$(dirname "$0")/.."
-# Match the VS Code extension's isolated PlatformIO install when available.
-if [ -x "$HOME/.platformio/penv/bin/pio" ]; then
-  exec "$HOME/.platformio/penv/bin/pio" "$@"
-fi
-exec pio "$@"
+echo "NU-87 uses Arduino CLI: run ./tools/nu87.sh build or ./tools/nu87.sh upload PORT" >&2
+exit 2

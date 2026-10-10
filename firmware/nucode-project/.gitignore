@@ -9,3 +9,6 @@
 __pycache__/
 *.pyc
 *.jsonl
+
+# Arduino CLI staging and artifacts
+.build/

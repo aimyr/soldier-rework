@@ -1,4 +1,3 @@
-#include <Adafruit_TinyUSB.h>
 #include <Arduino.h>
 #include "config.h"
 #include "core/log.h"
@@ -26,6 +25,7 @@ Periodic gpsTick(GPS_PERIOD_US), retryTick(IMU_RETRY_US), statusTick(1000000);
 void setup() {
   statusLed.begin();
   Serial.begin(SERIAL_DEBUG_BAUD);
+  beginLogging();
   bleReady = ble.begin();
   analogReady = analog.begin();
   imu.begin();
@@ -39,13 +39,15 @@ void loop() {
   if (imuTick.due(micros())) {
     ImuPacket packet{};
     if (imu.read(packet)) {
-      SerialTelemetry::print(packet);
+      static Periodic serialImu(1000000);
+      if (serialImu.due(micros())) SerialTelemetry::print(packet);
       if (bleReady) ble.sendImu(packet);
     }
   }
   if (vitalsTick.due(micros())) {
     if (analog.snapshot(vitals, sampleGaps)) {
-      SerialTelemetry::print(vitals);
+      static Periodic serialVitals(1000000);
+      if (serialVitals.due(micros())) SerialTelemetry::print(vitals);
       if (bleReady) ble.sendVitals(vitals);
     }
   }
@@ -63,7 +65,7 @@ void loop() {
       | ((freshAnalog && vitals.temp_c_x100 != INT16_MIN) ? 4 : 0)
       | ((freshAnalog && vitals.bpm) ? 8 : 0)
       | (position.fix ? 16 : 0) | (CFG_GPS ? 32 : 0);
-    StatusPacket packet{millis(), 1, flags, ble.dropped(), sampleGaps};
+    StatusPacket packet{millis(), 2, flags, ble.dropped(), sampleGaps};
     if (bleReady) ble.sendStatus(packet);
     SerialTelemetry::print(packet);
   }

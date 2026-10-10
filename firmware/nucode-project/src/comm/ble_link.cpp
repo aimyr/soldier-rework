@@ -1,115 +1,62 @@
 #include "ble_link.h"
-#include <bluefruit.h>
+#include <BLEDevice.h>
 #include <atomic>
-#include <queue.h>
-#include <task.h>
 #include <string.h>
 #include "config.h"
-#include "core/log.h"
 #include "protocol/uuids.h"
 
 namespace {
-BLEService        svc(UUID_SERVICE);
-BLECharacteristic chImu(UUID_IMU);
-BLECharacteristic chVitals(UUID_VITALS);
-BLECharacteristic chGps(UUID_GPS);
-BLECharacteristic chStatus(UUID_STATUS);
-
-struct Pending {
-  BLECharacteristic* characteristic;
-  uint32_t queuedMs;
-  uint32_t generation;
-  uint16_t connection;
-  uint8_t length;
-  uint8_t data[20];
-};
-QueueHandle_t pending = nullptr;
-std::atomic<uint32_t> dropped{0};
-std::atomic<uint32_t> generation{0};
-void transmit(void*) {
-  Pending packet;
-  for (;;) {
-    if (xQueueReceive(pending, &packet, portMAX_DELAY) != pdPASS) continue;
-    if (!Bluefruit.connected() || packet.generation != generation.load()
-        || packet.connection != Bluefruit.connHandle()
-        || (uint32_t)(millis() - packet.queuedMs) > 500) {
-      ++dropped; continue;
-    }
-    if (!packet.characteristic->notifyEnabled(packet.connection)) continue;
-    if (!packet.characteristic->notify(packet.connection, packet.data, packet.length)) ++dropped;
+BLEService service(UUID_SERVICE);
+BLECharacteristic imu(UUID_IMU), vitals(UUID_VITALS), gps(UUID_GPS), status(UUID_STATUS);
+BLECharacteristic* chars[] = {&imu, &vitals, &gps, &status};
+std::atomic<bool> subscribed[4];
+uint32_t drops = 0;
+void subscription(BLECharacteristic* chr, uint8_t connection, uint16_t bits) {
+  if (connection != 0) return;
+  for (unsigned i = 0; i < 4; ++i)
+    if (chars[i] == chr) subscribed[i].store((bits & GATT_CLIENT_CHAR_CONFIG_NOTIFY) != 0);
+}
+bool send(unsigned index, const void* data, uint8_t size) {
+  if (!BLE.connected(0)) {
+    for (auto& enabled : subscribed) enabled.store(false);
+    return false;
   }
+  if (!subscribed[index].load()) return false;
+  uint8_t bytes[20];
+  memcpy(bytes, data, size);
+  if (!chars[index]->setData(bytes, size)) { ++drops; return false; }
+  // The vendor API queues the notification but does not expose radio delivery
+  // status. drops counts local failures only, not over-the-air packet loss.
+  chars[index]->notify(0);
+  return true;
 }
-bool enqueue(BLECharacteristic& characteristic, const void* data, uint8_t length) {
-  if (!pending || !Bluefruit.connected() || !characteristic.notifyEnabled()) return false;
-  Pending packet{&characteristic, millis(), generation.load(), Bluefruit.connHandle(), length, {0}};
-  memcpy(packet.data, data, length);
-  if (xQueueSend(pending, &packet, 0) == pdPASS) return true;
-  ++dropped; // Bounded memory, never block acquisition when the PC is slow.
-  return false;
 }
-
-void onConnect(uint16_t)               { LOG("[ble] connected\n"); }
-void onDisconnect(uint16_t, uint8_t r) { ++generation; LOG("[ble] disconnected (0x%02X)\n", r); }
-}  // namespace
-
 bool BleLink::begin() {
-  // Every packet fits the mandatory MTU. Reserve a short event and enough
-  // notifications to batch the 50Hz stream at 30-50ms connection intervals.
-  Bluefruit.configPrphConn(23, 6, 8, 1);
-  if (!Bluefruit.begin()) return false;
-  if (!Bluefruit.Periph.setConnInterval(BLE_CONN_MIN_UNITS, BLE_CONN_MAX_UNITS)) return false;
-  Bluefruit.autoConnLed(false);
-  ledOff(LED_CONN);
-  if (!Bluefruit.setTxPower(BLE_TX_POWER_DBM)) return false;
-  Bluefruit.setName(BLE_DEVICE_NAME);
-  Bluefruit.Periph.setConnectCallback(onConnect);
-  Bluefruit.Periph.setDisconnectCallback(onDisconnect);
-
-  if (svc.begin() != ERROR_NONE) return false;
-
-  chImu.setProperties(CHR_PROPS_NOTIFY);
-  chImu.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
-  chImu.setFixedLen(sizeof(ImuPacket));
-  if (chImu.begin() != ERROR_NONE) return false;
-
-  chVitals.setProperties(CHR_PROPS_NOTIFY);
-  chVitals.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
-  chVitals.setFixedLen(sizeof(VitalsPacket));
-  if (chVitals.begin() != ERROR_NONE) return false;
-
-  chGps.setProperties(CHR_PROPS_NOTIFY);
-  chGps.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
-  chGps.setFixedLen(sizeof(GpsPacket));
-  if (chGps.begin() != ERROR_NONE) return false;
-
-  chStatus.setProperties(CHR_PROPS_NOTIFY | CHR_PROPS_READ);
-  chStatus.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
-  chStatus.setFixedLen(sizeof(StatusPacket));
-  if (chStatus.begin() != ERROR_NONE) return false;
-
-  pending = xQueueCreate(8, sizeof(Pending));
-  if (!pending) return false;
-  if (xTaskCreate(transmit, "ble_tx", 768, nullptr, 1, nullptr) != pdPASS) {
-    vQueueDelete(pending); pending = nullptr; return false;
+  BLEAdvertData advertisement, scan;
+  advertisement.addFlags(GAP_ADTYPE_FLAGS_GENERAL | GAP_ADTYPE_FLAGS_BREDR_NOT_SUPPORTED);
+  advertisement.addCompleteServices(BLEUUID(UUID_SERVICE));
+  scan.addCompleteName(BLE_DEVICE_NAME);
+  const uint8_t sizes[] = {sizeof(ImuPacket), sizeof(VitalsPacket), sizeof(GpsPacket), sizeof(StatusPacket)};
+  for (unsigned i = 0; i < 4; ++i) {
+    chars[i]->setNotifyProperty(true);
+    chars[i]->setBufferLen(sizes[i]);
+    chars[i]->setCCCDCallback(subscription);
+    service.addCharacteristic(*chars[i]);
   }
-
-  if (!Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE)
-      || !Bluefruit.Advertising.addTxPower()
-      || !Bluefruit.Advertising.addService(svc)
-      || !Bluefruit.ScanResponse.addName()) return false;
-  Bluefruit.Advertising.restartOnDisconnect(true);
-  Bluefruit.Advertising.setInterval(BLE_ADV_FAST_UNITS, BLE_ADV_SLOW_UNITS);
-  Bluefruit.Advertising.setFastTimeout(BLE_ADV_FAST_SECONDS);
-  return Bluefruit.Advertising.start(0);
+  BLE.init();
+  BLE.setDeviceName(BLE_DEVICE_NAME);
+  BLE.configAdvert()->setAdvData(advertisement);
+  BLE.configAdvert()->setScanRspData(scan);
+  BLE.configAdvert()->setMinInterval(250);
+  BLE.configAdvert()->setMaxInterval(500);
+  BLE.configServer(1);
+  BLE.addService(service);
+  BLE.beginPeripheral(); // Vendor handler restarts advertising on disconnect.
+  return true; // The vendor initialization API has no success return value.
 }
-
-bool BleLink::connected() const { return Bluefruit.connected(); }
-
-uint32_t BleLink::dropped() const { return ::dropped.load(); }
-bool BleLink::sendImu(const ImuPacket& p) { return enqueue(chImu, &p, sizeof(p)); }
-bool BleLink::sendVitals(const VitalsPacket& p) { return enqueue(chVitals, &p, sizeof(p)); }
-bool BleLink::sendGps(const GpsPacket& p) { return enqueue(chGps, &p, sizeof(p)); }
-bool BleLink::sendStatus(const StatusPacket& p) {
-  chStatus.write(&p, sizeof(p));
-  return enqueue(chStatus, &p, sizeof(p));
-}
+bool BleLink::connected() const { return BLE.connected(0); }
+uint32_t BleLink::dropped() const { return drops; }
+bool BleLink::sendImu(const ImuPacket& p) { return send(0, &p, sizeof(p)); }
+bool BleLink::sendVitals(const VitalsPacket& p) { return send(1, &p, sizeof(p)); }
+bool BleLink::sendGps(const GpsPacket& p) { return send(2, &p, sizeof(p)); }
+bool BleLink::sendStatus(const StatusPacket& p) { return send(3, &p, sizeof(p)); }

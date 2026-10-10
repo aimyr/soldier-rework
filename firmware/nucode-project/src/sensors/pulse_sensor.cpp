@@ -6,7 +6,8 @@ void PulseSensor::begin() {
 }
 
 void PulseSensor::sample() {
-  raw_ = analogRead(pin_);
+  const uint32_t sample = analogRead(pin_);
+  raw_ = sample > 4095 ? 4095 : sample;
   const int sig = raw_ >> (ADC_BITS - 10);  // Normalize to a 10-bit scale.
 
   const uint32_t now = millis();

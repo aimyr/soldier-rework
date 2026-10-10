@@ -1,4 +1,5 @@
 #include "i2c_bus.h"
+#include "config.h"
 namespace {
 void low(uint8_t pin) { digitalWrite(pin, LOW); pinMode(pin, OUTPUT); }
 void release(uint8_t pin) { pinMode(pin, INPUT_PULLUP); }

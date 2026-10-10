@@ -1,17 +1,23 @@
 #include "status_led.h"
 #include <Arduino.h>
+#include "config.h"
 
 void StatusLed::begin() {
-  pinMode(LED_BUILTIN, OUTPUT);
-  // Force a known state, regardless of variant initialization.
-  digitalWrite(LED_BUILTIN, LED_STATE_ON);
-  on_ = true;
+  pinMode(STATUS_LED_RED, OUTPUT);
+  pinMode(STATUS_LED_GREEN, OUTPUT);
+  pinMode(STATUS_LED_BLUE, OUTPUT);
+  on_ = false;
   state_ = State::Boot;
   sinceMs_ = millis();
+  set(true);
 }
 void StatusLed::set(bool on) {
-  if (on == on_) return;
-  digitalWrite(LED_BUILTIN, on ? LED_STATE_ON : !LED_STATE_ON);
+  const bool fault = state_ == State::Fatal || state_ == State::SensorFault;
+  const bool green = state_ == State::Connected || state_ == State::Boot;
+  const bool blue = state_ == State::Ready || state_ == State::Boot;
+  digitalWrite(STATUS_LED_RED, on && fault);
+  digitalWrite(STATUS_LED_GREEN, on && green);
+  digitalWrite(STATUS_LED_BLUE, on && blue);
   on_ = on;
 }
 void StatusLed::update(State state, uint32_t nowMs) {

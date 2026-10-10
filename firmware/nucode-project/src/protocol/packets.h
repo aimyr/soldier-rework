@@ -5,7 +5,7 @@
 // Keep these definitions synchronized with the PC decoder in tools/protocol.py.
 
 // IMU packet (16 bytes)
-//  accel: ±4 g  -> 0.122 mg/LSB,  gyro: ±500 dps -> 17.5 mdps/LSB
+//  accel: ±4 g  -> 8192 LSB/g,  gyro: ±500 dps -> 65.5 LSB/(deg/s)
 struct __attribute__((packed)) ImuPacket {
   uint32_t t_ms;
   int16_t  ax, ay, az;
@@ -35,7 +35,7 @@ struct __attribute__((packed)) GpsPacket {
 };
 static_assert(sizeof(GpsPacket) == 20, "GpsPacket size");
 
-// Status v1, 16 bytes. Flags: bit0 IMU online, bit1 analog task ready,
+// Status v2, 16 bytes. Flags: bit0 IMU online, bit1 analog task ready,
 // bit2 temperature valid, bit3 BPM available, bit4 GPS fix, bit5 GPS enabled.
 struct __attribute__((packed)) StatusPacket {
   uint32_t t_ms;

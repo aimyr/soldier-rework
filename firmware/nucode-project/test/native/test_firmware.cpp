@@ -1,4 +1,6 @@
 #include <cassert>
+#include "config.h"
+#include "sensors/mpu6050_decode.h"
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -42,6 +44,11 @@ void feed(NmeaParser& parser, const std::string& line, uint32_t now) {
   for (char c : line) parser.feed(c, now);
 }
 int main() {
+  const uint8_t rawImu[] = {0x20,0, 0xE0,0, 0x80,0, 0x12,0x34, 0x02,0x8F, 0xFD,0x71, 0x7F,0xFF};
+  const auto decoded = decodeMpu6050(rawImu, 123);
+  assert(decoded.t_ms == 123 && decoded.ax == 8192 && decoded.ay == -8192);
+  assert(decoded.az == -32768 && decoded.gx == 655 && decoded.gy == -655 && decoded.gz == 32767);
+
   FractionalTicks cadence(2000, 1024);
   uint32_t sumTicks = 0;
   for (uint32_t i = 1; i <= 500000; ++i) {
@@ -89,7 +96,7 @@ int main() {
   feed(speedExpiry, sentence(gga), 3000);
   assert(speedExpiry.snapshot(3100).fix && speedExpiry.snapshot(3100).speed_cms == 0);
   Tmp36 temp(2); temp.begin(); assert(temp.readCelsiusX100() == INT16_MIN);
-  adc = 853; for (int i = 0; i < 16; ++i) temp.sample();
+  adc = 931; for (int i = 0; i < 16; ++i) temp.sample();
   assert(std::abs(temp.readCelsiusX100() - 2500) < 10);
   adc = 4095; for (int i = 0; i < 16; ++i) temp.sample();
   assert(temp.readCelsiusX100() == INT16_MIN);

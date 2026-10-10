@@ -1,6 +1,6 @@
 """Node-side trigger rules: WHEN does a soldier node break radio silence?
 
-This is the reference implementation the ESP32 firmware should mirror.
+This is the reference implementation the NU-87 node firmware should mirror.
 The simulator runs it on every synthetic sample, so the commander only ever
 receives what a real node would transmit.
 

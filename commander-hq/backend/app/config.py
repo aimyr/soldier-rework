@@ -6,7 +6,7 @@ def _env(name: str, default: str) -> str:
     return os.environ.get(name, default)
 
 
-# Data source: "sim" (built-in simulator) or "serial" (gateway ESP32 over USB)
+# Data source: "sim" (built-in simulator) or "serial" (gateway NU-87 over USB)
 SOURCE = _env("C2_SOURCE", "sim")
 SERIAL_PORT = _env("C2_SERIAL_PORT", "/dev/ttyUSB0")  # Windows: COM3
 SERIAL_BAUD = int(_env("C2_SERIAL_BAUD", "115200"))

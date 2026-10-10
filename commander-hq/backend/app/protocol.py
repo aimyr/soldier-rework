@@ -1,6 +1,6 @@
-"""Over-the-air packet format shared with the ESP32 firmware.
+"""Over-the-air packet format shared with the NU-87 firmware.
 
-See docs/DATA_SPEC.md for the authoritative description. Every field is
+See docs/DATA_SPEC.md (repository root) for the authoritative description. Every field is
 little-endian. One packet is 18 bytes so a single short burst carries it.
 """
 from __future__ import annotations
@@ -65,7 +65,7 @@ class Packet:
 
 
 def crc8(data: bytes) -> int:
-    """CRC-8 (poly 0x07, init 0x00). Same routine must run on the ESP32."""
+    """CRC-8 (poly 0x07, init 0x00). Same routine runs on the nodes and gateway."""
     crc = 0
     for b in data:
         crc ^= b

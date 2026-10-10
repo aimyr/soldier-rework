@@ -1,4 +1,4 @@
-"""Hardware data source: the gateway ESP32 prints received packets over USB serial.
+"""Hardware data source: the gateway NU-87 prints received packets over USB serial.
 
 Expected line format (one per received packet):
     PKT:<36 hex chars>,RSSI:<int>

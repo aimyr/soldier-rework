@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import csv
 import math
+import re
 import time
 from collections import deque
 from pathlib import Path
@@ -14,9 +15,26 @@ from pathlib import Path
 from pydantic import BaseModel, Field, field_validator
 
 LOG_DIR = Path(__file__).resolve().parents[1] / "data"
-CSV_FIELDS = ["recv_unix_ms", "device_id", "fix_unix_ms", "lat", "lon", "accuracy_m",
-              "heading_deg", "heading_source", "heading_gps_deg", "heading_compass_deg",
-              "compass_accuracy_deg", "speed_mps", "alt_m", "alt_accuracy_m"]
+LOG_NAME_RE = re.compile(r"^gps_\d{8}_\d{6}\.csv$")
+
+# CSV header (English, unit in the name) -> key in the fix row
+CSV_COLUMNS = {
+    "time_local": "time_local",              # laptop receive time, YYYY-MM-DD HH:MM:SS.mmm
+    "device_id": "device_id",
+    "latitude_deg": "lat",                   # Latitude, WGS84 decimal degrees (+N / -S)
+    "longitude_deg": "lon",                  # Longitude, WGS84 decimal degrees (+E / -W)
+    "accuracy_m": "accuracy_m",              # Horizontal accuracy radius, metres (95 %)
+    "heading_deg": "heading_deg",            # Heading / azimuth, degrees clockwise from north
+    "heading_source": "heading_source",      # gps | compass | none
+    "heading_gps_course_deg": "heading_gps_deg",
+    "heading_compass_deg": "heading_compass_deg",
+    "compass_accuracy_deg": "compass_accuracy_deg",
+    "speed_mps": "speed_mps",
+    "altitude_m": "alt_m",
+    "altitude_accuracy_m": "alt_accuracy_m",
+    "phone_fix_unix_ms": "fix_unix_ms",
+    "laptop_recv_unix_ms": "recv_unix_ms",
+}
 
 
 def _deg_or_none(v: float | None) -> float | None:
@@ -63,15 +81,17 @@ class GpsStore:
         log_dir.mkdir(parents=True, exist_ok=True)
         self.csv_path = log_dir / f"gps_{time.strftime('%Y%m%d_%H%M%S')}.csv"
         self._f = self.csv_path.open("w", newline="", encoding="utf-8")
-        self._w = csv.DictWriter(self._f, fieldnames=CSV_FIELDS)
-        self._w.writeheader()
+        self._w = csv.writer(self._f)
+        self._w.writerow(CSV_COLUMNS)
         self._f.flush()
 
     def ingest(self, fix: GpsFix) -> dict:
         heading, src = fix.heading()
-        row = fix.model_dump() | {"recv_unix_ms": int(time.time() * 1000),
-                                  "heading_deg": heading, "heading_source": src}
-        self._w.writerow({k: row.get(k) for k in CSV_FIELDS})
+        now = time.time()
+        row = fix.model_dump() | {
+            "recv_unix_ms": int(now * 1000), "heading_deg": heading, "heading_source": src,
+            "time_local": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)) + f".{int(now * 1000) % 1000:03d}"}
+        self._w.writerow(["" if row.get(k) is None else row[k] for k in CSV_COLUMNS.values()])
         self._f.flush()
         self.latest[fix.device_id] = row
         tr = self.tracks.setdefault(fix.device_id, deque(maxlen=self.track_len))
@@ -85,6 +105,23 @@ class GpsStore:
             devices.append(row | {"age_s": round((now - row["recv_unix_ms"]) / 1000, 1),
                                   "track": list(self.tracks.get(dev, []))})
         return {"devices": devices, "csv": self.csv_path.name}
+
+    def log_files(self) -> list[dict]:
+        """All CSV logs in the data folder, newest first."""
+        out = []
+        for p in sorted(self.csv_path.parent.glob("gps_*.csv"), reverse=True):
+            if LOG_NAME_RE.match(p.name):
+                with p.open(encoding="utf-8") as f:
+                    rows = max(0, sum(1 for _ in f) - 1)
+                out.append({"name": p.name, "bytes": p.stat().st_size, "rows": rows,
+                            "current": p == self.csv_path})
+        return out
+
+    def log_path(self, name: str) -> Path | None:
+        if not LOG_NAME_RE.match(name):
+            return None
+        p = self.csv_path.parent / name
+        return p if p.is_file() else None
 
     def close(self) -> None:
         self._f.close()

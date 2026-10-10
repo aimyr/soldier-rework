@@ -208,6 +208,27 @@ def get_gps() -> dict:
     return hub.gps.snapshot()
 
 
+@app.get("/gps/pc", include_in_schema=False)
+def gps_pc_page() -> FileResponse:
+    """Laptop monitor: live readings with English labels + CSV download."""
+    return FileResponse(_static / "gps_pc.html")
+
+
+@app.get("/api/gps/logs")
+def gps_logs() -> dict:
+    return {"files": hub.gps.log_files()}
+
+
+@app.get("/api/gps/csv")
+def gps_csv(name: str | None = None) -> FileResponse:
+    """Download a CSV log: the current session by default, or ?name=gps_YYYYMMDD_HHMMSS.csv."""
+    path = hub.gps.csv_path if name is None else hub.gps.log_path(name)
+    if path is None:
+        raise HTTPException(404, "no such log")
+    return FileResponse(path, media_type="text/csv", filename=path.name,
+                        headers={"Cache-Control": "no-store"})
+
+
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
     await ws.accept()

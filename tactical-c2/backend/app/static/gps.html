@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -44,17 +44,17 @@
 <main>
   <div class="row">
     <input id="dev" value="P1" maxlength="32" aria-label="Device ID">
-    <button id="startBtn" class="primary">측정 시작</button>
-    <button id="csvBtn">CSV</button>
+    <button id="startBtn" class="primary">Start</button>
+    <button id="csvBtn">Save CSV</button>
   </div>
   <div class="grid">
-    <div class="cell"><div class="k">위도 (lat)</div><div class="v" id="lat">—</div></div>
-    <div class="cell"><div class="k">경도 (lon)</div><div class="v" id="lon">—</div></div>
-    <div class="cell"><div class="k">정확도 (accuracy)</div><div class="v" id="acc">—</div><div class="s" id="accQ"></div></div>
-    <div class="cell"><div class="k">방위각 (heading)</div><div class="v" id="hdg">—</div><div class="s" id="hdgSrc"></div></div>
-    <div class="cell"><div class="k">나침반 (compass)</div><div class="v" id="cmp">—</div><div class="s" id="cmpS"></div></div>
-    <div class="cell"><div class="k">GPS 진행방향 / 속도</div><div class="v" id="crs">—</div><div class="s" id="spd"></div></div>
-    <div class="cell wide"><div class="k">전송</div><div class="s" id="tx">미시작</div></div>
+    <div class="cell"><div class="k">Latitude (deg, +N)</div><div class="v" id="lat">—</div></div>
+    <div class="cell"><div class="k">Longitude (deg, +E)</div><div class="v" id="lon">—</div></div>
+    <div class="cell"><div class="k">Accuracy (m, radius)</div><div class="v" id="acc">—</div><div class="s" id="accQ"></div></div>
+    <div class="cell"><div class="k">Heading / Azimuth (deg from N)</div><div class="v" id="hdg">—</div><div class="s" id="hdgSrc"></div></div>
+    <div class="cell"><div class="k">Compass heading</div><div class="v" id="cmp">—</div><div class="s" id="cmpS"></div></div>
+    <div class="cell"><div class="k">GPS course / Speed</div><div class="v" id="crs">—</div><div class="s" id="spd"></div></div>
+    <div class="cell wide"><div class="k">Upload to laptop</div><div class="s" id="tx">Not started</div></div>
   </div>
   <p id="msg"></p>
 </main>
@@ -73,11 +73,11 @@ const st = { watchId:null, compass:null, compassAcc:null, last:null, lastSent:0,
 // ---------------------------------------------------------------- map (OSM)
 let map = null, marker = null, accCircle = null, trail = null;
 function initMap() {
-  if (!window.L) { note("지도 라이브러리를 불러오지 못했습니다(오프라인). 측정·전송은 계속됩니다."); return; }
+  if (!window.L) { note("Map library could not load (offline). Measuring and upload still work."); return; }
   map = L.map("map", { zoomControl:true }).setView([37.5665, 126.9780], 16);
   const tiles = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom:19, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' });
-  tiles.on("tileerror", () => note("OSM 타일을 받지 못했습니다(인터넷 없음). 좌표는 정상 측정됩니다."));
+  tiles.on("tileerror", () => note("OpenStreetMap tiles unavailable (no internet). Coordinates are still measured."));
   tiles.addTo(map);
   const icon = L.divIcon({ className:"", iconSize:[30,30], iconAnchor:[15,15],
     html:'<svg class="arrow" id="arrow" viewBox="0 0 30 30"><circle cx="15" cy="15" r="6" fill="#62b6ff" stroke="#fff" stroke-width="2"/><path d="M15 1 L20 11 L10 11 Z" fill="#62b6ff" stroke="#fff" stroke-width="1"/></svg>' });
@@ -112,13 +112,13 @@ async function startCompass() {
   if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
     try {                                          // iOS 13+: must be called from a user gesture
       const r = await DeviceOrientationEvent.requestPermission();
-      if (r !== "granted") { note("나침반 권한이 거부되었습니다. 방위각은 이동 중 GPS 진행방향만 사용합니다."); return; }
-    } catch (err) { note("나침반 권한 요청 실패: " + err.message); return; }
+      if (r !== "granted") { note("Compass permission denied. Heading will use GPS course while moving only."); return; }
+    } catch (err) { note("Compass permission request failed: " + err.message); return; }
     window.addEventListener("deviceorientation", onIosOrientation, true);
   } else if ("ondeviceorientationabsolute" in window) {
     window.addEventListener("deviceorientationabsolute", onAbsOrientation, true);
   } else {
-    note("이 브라우저는 절대 방위(나침반)를 제공하지 않습니다. 이동 중 GPS 진행방향만 사용합니다.");
+    note("This browser has no absolute compass. Heading will use GPS course while moving only.");
   }
 }
 function stopCompass() {
@@ -141,10 +141,10 @@ function onPosition(pos) {
     alt_accuracy_m: Number.isFinite(c.altitudeAccuracy) ? c.altitudeAccuracy : null,
   };
   const moving = f.speed_mps != null && f.speed_mps >= MOVING_MPS;
-  let heading = null, src = "없음";
-  if (moving && f.heading_gps_deg != null) { heading = f.heading_gps_deg; src = "GPS 진행방향 (이동 중)"; }
-  else if (f.heading_compass_deg != null) { heading = f.heading_compass_deg; src = "나침반"; }
-  else if (f.heading_gps_deg != null) { heading = f.heading_gps_deg; src = "GPS 진행방향"; }
+  let heading = null, src = "none";
+  if (moving && f.heading_gps_deg != null) { heading = f.heading_gps_deg; src = "source: GPS course (moving)"; }
+  else if (f.heading_compass_deg != null) { heading = f.heading_compass_deg; src = "source: compass"; }
+  else if (f.heading_gps_deg != null) { heading = f.heading_gps_deg; src = "source: GPS course"; }
   st.last = f;
   render(f, heading, src);
   updateMap(f, heading);
@@ -152,8 +152,8 @@ function onPosition(pos) {
   if (now - st.lastSent >= SEND_INTERVAL_MS) { st.lastSent = now; enqueue(f); }
 }
 function onPosError(err) {
-  const why = { 1:"위치 권한 거부", 2:"위치 확인 불가(실내/신호 약함)", 3:"응답 시간 초과" }[err.code] || err.message;
-  note("GPS 오류: " + why);
+  const why = { 1:"location permission denied", 2:"position unavailable (indoors / weak signal)", 3:"timeout" }[err.code] || err.message;
+  note("GPS error: " + why);
   pill(err.code === 1 ? "bad" : "warn", err.code === 1 ? "NO PERMISSION" : "NO FIX");
 }
 
@@ -182,7 +182,7 @@ async function flush() {
     pill("warn", "BUFFERING");
   } finally {
     flushing = false;
-    $("tx").textContent = `전송 ${st.sent} · 대기 ${st.queue.length} · 무효 ${st.failed} · 로컬기록 ${st.log.length}`;
+    $("tx").textContent = `sent ${st.sent} · queued ${st.queue.length} · invalid ${st.failed} · saved on phone ${st.log.length}`;
   }
 }
 setInterval(() => { if (st.watchId != null && st.queue.length) flush(); }, 3000);
@@ -193,13 +193,13 @@ function render(f, heading, src) {
   $("lat").textContent = f.lat.toFixed(7);
   $("lon").textContent = f.lon.toFixed(7);
   $("acc").textContent = f.accuracy_m.toFixed(1) + " m";
-  $("accQ").textContent = f.accuracy_m <= 10 ? "양호" : f.accuracy_m <= 30 ? "보통" : "낮음 — 실외·하늘 개방 위치 권장";
+  $("accQ").textContent = f.accuracy_m <= 10 ? "good" : f.accuracy_m <= 30 ? "fair" : "poor - move outdoors, open sky";
   $("hdg").textContent = heading == null ? "—" : heading.toFixed(1) + "°";
   $("hdgSrc").textContent = src;
   $("cmp").textContent = f.heading_compass_deg == null ? "—" : f.heading_compass_deg.toFixed(1) + "°";
-  $("cmpS").textContent = st.compassAcc != null ? `±${st.compassAcc}°` : "기기 상단 기준";
+  $("cmpS").textContent = st.compassAcc != null ? `±${st.compassAcc}°` : "top edge of phone";
   $("crs").textContent = f.heading_gps_deg == null ? "—" : f.heading_gps_deg.toFixed(1) + "°";
-  $("spd").textContent = f.speed_mps == null ? "속도 —" : `${fmt(f.speed_mps, 2)} m/s`;
+  $("spd").textContent = f.speed_mps == null ? "speed —" : `${fmt(f.speed_mps, 2)} m/s`;
 }
 function note(t) { $("msg").textContent = t; }
 function pill(cls, t) { const p = $("netPill"); p.className = "pill " + cls; p.textContent = t; }
@@ -207,18 +207,18 @@ function pill(cls, t) { const p = $("netPill"); p.className = "pill " + cls; p.t
 async function start() {
   note("");
   if (!window.isSecureContext) {
-    note("HTTPS가 아니어서 브라우저가 위치 접근을 막습니다.\nhttps://<노트북IP>:8443/gps 로 접속하세요 (README 참고).");
+    note("Not HTTPS, so the browser blocks location access.\nOpen https://<laptop-ip>:8443/gps (see README).");
     pill("bad", "NOT HTTPS");
     return;
   }
-  if (!("geolocation" in navigator)) { note("이 브라우저는 Geolocation을 지원하지 않습니다."); return; }
+  if (!("geolocation" in navigator)) { note("This browser does not support Geolocation."); return; }
   await startCompass();
   st.watchId = navigator.geolocation.watchPosition(onPosition, onPosError,
     { enableHighAccuracy:true, maximumAge:0, timeout:15000 });
   try { st.wakeLock = await navigator.wakeLock?.request("screen"); } catch (_) { /* optional */ }
   st.follow = true;
   pill("warn", "WAIT FIX");
-  $("startBtn").textContent = "측정 중지"; $("startBtn").className = "stop";
+  $("startBtn").textContent = "Stop"; $("startBtn").className = "stop";
   $("dev").disabled = true;
 }
 function stop() {
@@ -227,14 +227,16 @@ function stop() {
   stopCompass();
   st.wakeLock?.release?.(); st.wakeLock = null;
   pill("", "IDLE");
-  $("startBtn").textContent = "측정 시작"; $("startBtn").className = "primary";
+  $("startBtn").textContent = "Start"; $("startBtn").className = "primary";
   $("dev").disabled = false;
 }
 $("startBtn").addEventListener("click", () => (st.watchId == null ? start() : stop()));
 $("csvBtn").addEventListener("click", () => {
-  const cols = ["device_id","fix_unix_ms","lat","lon","accuracy_m","heading_gps_deg","heading_compass_deg",
-                "compass_accuracy_deg","speed_mps","alt_m","alt_accuracy_m"];
-  const lines = [cols.join(",")].concat(st.log.map((f) => cols.map((k) => f[k] ?? "").join(",")));
+  const cols = [["device_id","device_id"],["latitude_deg","lat"],["longitude_deg","lon"],["accuracy_m","accuracy_m"],
+                ["heading_gps_course_deg","heading_gps_deg"],["heading_compass_deg","heading_compass_deg"],
+                ["compass_accuracy_deg","compass_accuracy_deg"],["speed_mps","speed_mps"],["altitude_m","alt_m"],
+                ["altitude_accuracy_m","alt_accuracy_m"],["phone_fix_unix_ms","fix_unix_ms"]];
+  const lines = [cols.map((c) => c[0]).join(",")].concat(st.log.map((f) => cols.map((c) => f[c[1]] ?? "").join(",")));
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([lines.join("\n")], { type:"text/csv" }));
   a.download = `gps_${$("dev").value || "P1"}_${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;

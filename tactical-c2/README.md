@@ -93,6 +93,11 @@ RUN_GPS.bat        # HTTPS on :8443, creates a self-signed cert on first run
 | `heading_compass_deg` | `deviceorientationabsolute` (Android) / `webkitCompassHeading` (iOS) | where the top of the phone points, from magnetic sensor |
 | `heading_deg` | chosen by backend | GNSS course if speed ≥ 1 m/s, else compass |
 
+On the laptop, `https://localhost:8443/gps/pc` (opened automatically by
+`RUN_GPS.bat`) shows the live readings with English labels and a **Download CSV**
+button, plus links to every earlier log. CSV columns start with
+`time_local, device_id, latitude_deg, longitude_deg, accuracy_m, heading_deg`.
+
 Every fix is appended to `backend/data/gps_<start time>.csv`; the latest fix per
 device is in `GET /api/gps`, in `/api/state` under `gps`, and pushed on the
 WebSocket as `{"type": "gps", "fix": {...}}`. If the laptop is unreachable the
@@ -112,6 +117,9 @@ internet; without it the readings and upload still work, only the map is blank.
 | GET | `/gps` | phone GPS measurement page |
 | POST | `/api/gps` | one phone fix (JSON, see above) |
 | GET | `/api/gps` | latest fix and track per phone |
+| GET | `/gps/pc` | laptop monitor page with CSV download |
+| GET | `/api/gps/csv` | download current CSV (`?name=gps_YYYYMMDD_HHMMSS.csv` for older logs) |
+| GET | `/api/gps/logs` | list CSV logs |
 | WS | `/ws` | pushes `{"type":"state"}` every second and `{"type":"briefing"}` |
 
 ## Layout

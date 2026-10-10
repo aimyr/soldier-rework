@@ -82,6 +82,8 @@ $url = "https://${ip}:$port/gps"
 Step "Open this on the PHONE"
 Write-Host "  $url" -ForegroundColor Green
 & $vpy -c "import sys,qrcode;q=qrcode.QRCode(border=1);q.add_data(sys.argv[1]);q.print_ascii(invert=True)" $url 2>$null
-Write-Host "Laptop check: https://localhost:$port/api/gps    CSV log: backend\data\"
+Write-Host "LAPTOP monitor + CSV download: https://localhost:$port/gps/pc" -ForegroundColor Green
+Write-Host "CSV files are also saved automatically in backend\data\"
+Start-Job -ScriptBlock { param($u) Start-Sleep 4; Start-Process $u } -ArgumentList "https://localhost:$port/gps/pc" | Out-Null
 Write-Host "Stop with Ctrl+C.`n"
 & $vpy -m uvicorn app.main:app --host 0.0.0.0 --port $port --ssl-keyfile certs\key.pem --ssl-certfile certs\cert.pem

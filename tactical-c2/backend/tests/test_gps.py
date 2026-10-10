@@ -20,8 +20,13 @@ def test_store_writes_csv(tmp_path):
     s = GpsStore(log_dir=tmp_path)
     s.ingest(GpsFix(**FIX))
     s.close()
-    rows = list(csv.DictReader(s.csv_path.open(encoding="utf-8")))
-    assert rows[0]["lat"] == "37.5665" and rows[0]["heading_source"] == "compass"
+    with s.csv_path.open(encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert list(rows[0])[:6] == ["time_local", "device_id", "latitude_deg", "longitude_deg",
+                                 "accuracy_m", "heading_deg"]
+    assert rows[0]["latitude_deg"] == "37.5665" and rows[0]["heading_deg"] == "12.5"
+    assert rows[0]["heading_gps_course_deg"] == "" and rows[0]["heading_source"] == "compass"
+    assert s.log_path("../secret.csv") is None and s.log_path(s.csv_path.name) == s.csv_path
 
 
 def test_api_roundtrip():
@@ -34,3 +39,10 @@ def test_api_roundtrip():
         dev = c.get("/api/gps").json()["devices"][0]
         assert dev["device_id"] == "P1" and dev["track"] == [[37.5665, 126.978]]
         assert c.get("/api/state").json()["gps"]["devices"][0]["accuracy_m"] == 4.8
+        assert c.get("/gps/pc").status_code == 200
+        csv_r = c.get("/api/gps/csv")
+        assert csv_r.status_code == 200 and "attachment" in csv_r.headers["content-disposition"]
+        assert csv_r.text.splitlines()[0].startswith("time_local,device_id,latitude_deg,longitude_deg,accuracy_m,heading_deg")
+        name = c.get("/api/gps/logs").json()["files"][0]["name"]
+        assert c.get("/api/gps/csv", params={"name": name}).status_code == 200
+        assert c.get("/api/gps/csv", params={"name": "../app/main.py"}).status_code == 404

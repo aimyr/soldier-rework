@@ -69,6 +69,37 @@ instead (`briefing._grounded`). Every briefing on the COP shows its source.
 The header shows **radio silence %**: the share of sensor samples that never
 went on air, compared with a design that streams every sample.
 
+## Phone GPS node (stopgap for the missing GPS module)
+
+The team has no GPS module, so a phone measures **latitude, longitude, accuracy
+and heading** in its browser and posts one fix per second to the backend.
+
+```powershell
+RUN_GPS.bat        # HTTPS on :8443, creates a self-signed cert on first run
+```
+
+1. Put the phone and the laptop on the same Wi-Fi or phone hotspot.
+2. On the phone open `https://<laptop-ip>:8443/gps` (the URL is printed at start).
+   Accept the certificate warning once (self-signed). HTTPS is required:
+   browsers block the Geolocation API on plain `http://` except `localhost`.
+3. Enter a device ID (e.g. `P1`) and press **측정 시작**. Allow location (and
+   motion/compass on iOS).
+
+| Field | Source on the phone | Notes |
+|---|---|---|
+| `lat`, `lon` | `GeolocationPosition.coords` | WGS84 degrees |
+| `accuracy_m` | `coords.accuracy` | radius in metres; ≤ 10 m is good |
+| `heading_gps_deg` | `coords.heading` | course over ground, `null` when standing still |
+| `heading_compass_deg` | `deviceorientationabsolute` (Android) / `webkitCompassHeading` (iOS) | where the top of the phone points, from magnetic sensor |
+| `heading_deg` | chosen by backend | GNSS course if speed ≥ 1 m/s, else compass |
+
+Every fix is appended to `backend/data/gps_<start time>.csv`; the latest fix per
+device is in `GET /api/gps`, in `/api/state` under `gps`, and pushed on the
+WebSocket as `{"type": "gps", "fix": {...}}`. If the laptop is unreachable the
+page buffers up to ~15 min of fixes and resends them; the **CSV** button saves
+the phone's own copy. The page map uses OpenStreetMap tiles, which need
+internet; without it the readings and upload still work, only the map is blank.
+
 ## API
 
 | Method | Path | |
@@ -78,6 +109,9 @@ went on air, compared with a design that streams every sample.
 | POST | `/api/scenario` | `{"name": "ambush"}` (sim only; `reset` clears) |
 | POST | `/api/soldiers/{id}/ack` | commander acknowledges an alert |
 | POST | `/api/briefing` | generate a briefing now |
+| GET | `/gps` | phone GPS measurement page |
+| POST | `/api/gps` | one phone fix (JSON, see above) |
+| GET | `/api/gps` | latest fix and track per phone |
 | WS | `/ws` | pushes `{"type":"state"}` every second and `{"type":"briefing"}` |
 
 ## Layout

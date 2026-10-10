@@ -9,12 +9,14 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import config
 from .briefing import Briefer
 from .engine import Engine
+from .gps import GpsFix, GpsStore
 from .protocol import PACKET_SIZE, PacketError, decode, parse_gateway_line
 from .simulator import SCENARIOS, SquadSimulator
 
@@ -34,6 +36,7 @@ class Hub:
         self.t0 = time.monotonic()
         self._brief_pending = False
         self.serial_queue: asyncio.Queue = asyncio.Queue()
+        self.gps = GpsStore()
 
     def now(self) -> float:
         return self.sim.t if self.sim else time.monotonic() - self.t0
@@ -53,6 +56,7 @@ class Hub:
         snap["source"] = config.SOURCE
         snap["emission"] = self.sim.emission_stats() if self.sim else None
         snap["briefings"] = self.briefings[:10]
+        snap["gps"] = self.gps.snapshot()
         snap["llm"] = {"enabled": config.LLM_ENABLED, "reachable": self.briefer.llm_ok,
                        "model": config.LLM_MODEL, "base_url": config.LLM_BASE_URL}
         return snap
@@ -126,6 +130,7 @@ async def lifespan(app: FastAPI):
     yield
     for t in tasks:
         t.cancel()
+    hub.gps.close()
 
 
 app = FastAPI(title="Squad Tactical C2", version="0.1.0", lifespan=lifespan)
@@ -179,6 +184,28 @@ async def briefing_now() -> dict:
     hub.briefings.insert(0, b)
     await hub.broadcast({"type": "briefing", "briefing": b})
     return b
+
+
+# ---------------------------------------------------------------- phone GPS
+_static = Path(__file__).resolve().parent / "static"
+
+
+@app.get("/gps", include_in_schema=False)
+def gps_page() -> FileResponse:
+    """Phone measurement page. Open it on the phone over HTTPS (see README)."""
+    return FileResponse(_static / "gps.html")
+
+
+@app.post("/api/gps")
+async def post_gps(fix: GpsFix) -> dict:
+    row = hub.gps.ingest(fix)
+    await hub.broadcast({"type": "gps", "fix": row})
+    return {"ok": True, "heading_deg": row["heading_deg"], "heading_source": row["heading_source"]}
+
+
+@app.get("/api/gps")
+def get_gps() -> dict:
+    return hub.gps.snapshot()
 
 
 @app.websocket("/ws")

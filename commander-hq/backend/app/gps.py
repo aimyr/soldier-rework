@@ -48,8 +48,13 @@ CSV_COLUMNS = {
     "camera_roll_deg": "camera_roll_deg",
     "orientation_source": "orientation_source",
     "orientation_unix_ms": "orientation_unix_ms",
+    "motion_state": "motion_state",
+    "motion_unix_ms": "motion_unix_ms",
+    "linear_accel_rms_mps2": "linear_accel_rms_mps2",
+    "rotation_rate_rms_dps": "rotation_rate_rms_dps",
     "client_fix_age_ms": "fix_age_ms",
     "client_orientation_age_ms": "orientation_age_ms",
+    "client_motion_age_ms": "motion_age_ms",
     "phone_fix_unix_ms": "fix_unix_ms",
     "laptop_recv_unix_ms": "recv_unix_ms",
     "device_name": "device_name",            # phone model / OS reported by the browser
@@ -91,6 +96,11 @@ class GpsFix(BaseModel):
     # the stored GPS age even if their claimed age is zero.
     fix_age_ms: float | None = Field(default=None, ge=0, le=86_400_000)
     orientation_age_ms: float | None = Field(default=None, ge=0, le=86_400_000)
+    motion_state: Literal["unknown", "still", "moving"] = "unknown"
+    motion_unix_ms: int | None = Field(default=None, ge=0, le=253402300799999)
+    motion_age_ms: float | None = Field(default=None, ge=0, le=86_400_000)
+    linear_accel_rms_mps2: float | None = Field(default=None, ge=0, le=200)
+    rotation_rate_rms_dps: float | None = Field(default=None, ge=0, le=2000)
 
     @field_validator("device_name")
     @classmethod
@@ -164,10 +174,14 @@ class GpsStore:
         if timing["orientation_mono"] is not None:
             orientation_age = (timing["orientation_initial_age_s"]
                                + max(0.0, mono - timing["orientation_mono"]))
+        motion_age = None
+        if timing["motion_mono"] is not None:
+            motion_age = timing["motion_initial_age_s"] + max(0.0, mono - timing["motion_mono"])
         return row | {
             "age_s": round(age, 1), "fix_age_s": round(fix_age, 1),
             "fix_time_reliable": timing["fix_time_reliable"],
             "orientation_age_s": None if orientation_age is None else round(orientation_age, 1),
+            "motion_age_s": None if motion_age is None else round(motion_age, 1),
             "orientation_stale": (orientation_age is None or orientation_age > ORIENTATION_STALE_AFTER_S
                                   or row["orientation_source"] == "none" or row["camera_heading_deg"] is None),
             "stale": fix_age > STALE_AFTER_S, "offline": age > OFFLINE_AFTER_S,
@@ -210,6 +224,15 @@ class GpsStore:
             for field in orientation_fields:
                 row[field] = previous[field]
 
+        motion_fields = ("motion_state", "motion_unix_ms", "motion_age_ms",
+                         "linear_accel_rms_mps2", "rotation_rate_rms_dps")
+        new_motion = fix.motion_unix_ms is not None and (
+            previous is None or previous["motion_unix_ms"] is None
+            or fix.motion_unix_ms > previous["motion_unix_ms"])
+        if previous is not None and not new_motion:
+            for field in motion_fields:
+                row[field] = previous[field]
+
         heading, src = GpsFix(**row).heading()
         row.update(heading_deg=heading, heading_source=src)
         seen = self._ips.setdefault(fix.device_id, {})
@@ -219,7 +242,8 @@ class GpsStore:
         row["id_conflict"] = len(seen) > 1   # same ID sent from two phones within 15 s
         self.latest[fix.device_id] = row
         timing = self._timing.setdefault(fix.device_id, {
-            "orientation_mono": None, "orientation_initial_age_s": 0.0})
+            "orientation_mono": None, "orientation_initial_age_s": 0.0,
+            "motion_mono": None, "motion_initial_age_s": 0.0})
         timing["recv_mono"] = mono
         if new_position:
             initial_age, reliable = self._initial_age(fix.fix_unix_ms, fix.fix_age_ms, now)
@@ -227,6 +251,9 @@ class GpsStore:
         if new_orientation:
             initial_age, _ = self._initial_age(fix.orientation_unix_ms, fix.orientation_age_ms, now)
             timing.update(orientation_mono=mono, orientation_initial_age_s=initial_age)
+        if new_motion:
+            initial_age, _ = self._initial_age(fix.motion_unix_ms, fix.motion_age_ms, now)
+            timing.update(motion_mono=mono, motion_initial_age_s=initial_age)
         tr = self.tracks.setdefault(fix.device_id, deque(maxlen=self.track_len))
         if new_position:
             tr.append((fix.lat, fix.lon))

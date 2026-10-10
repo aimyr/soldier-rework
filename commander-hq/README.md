@@ -66,6 +66,12 @@ Open `http://localhost:8765/ar` and press **Try demo**. Demo participants stay i
 
 ### Direction and height
 
+**GPS and phone motion:** both phone pages collect optional `devicemotion` readings after Start. Linear acceleration and angular-rate magnitudes are summarized as RMS values and a conservative `unknown` / `still` / `moving` phone-motion state. The GPS packet binds those readings to the same device ID with a separate sensor timestamp and age. The backend keeps GPS and motion freshness independently; new IMU readings cannot make an old GPS position fresh. A sensor permission denial or missing readings leaves GPS collection working.
+
+The viewing phone can enable **Стабилизировать GPS с учётом движения телефона** (on by default). This smooths the viewer and participant positions using GPS timestamps, reported uncertainty, speed and recent motion state. Stationary jitter is reduced; movement remains responsive and repeated large changes can reacquire a new position. Raw latitude/longitude, GPS timestamps and reported accuracy are never replaced in uploads or logs. Stop clears the filter and sensor listeners. Disable/re-enable the setting to reset the display filter, then repeat visual alignment if necessary.
+
+This is sensor-assisted display stabilization, not centimetre-level positioning. It can introduce tracking delay, and a stationary-looking phone can still be carried at a steady speed. GPS motion overrides are therefore required. Acceleration is not integrated twice into a position: bias would accumulate rapidly, and the phone frame does not necessarily match the walking direction. See [W3C motion readings](https://www.w3.org/TR/orientation-event/#devicemotion) and [Android linear-acceleration limitations](https://developer.android.com/develop/sensors-and-location/sensors/sensors_motion#sensors-motion-linear). GPS travel course is kept separate from camera direction.
+
 **Manual alignment on the viewing phone:** start `/ar`, then in **Калибровка по человеку** select the other phone's ID. Both phones need fresh GPS; the other phone can use `/gps` without its camera. Stand still, preferably 10–20 m apart or farther, aim the central **+** at the person with that phone, and press **Совместить**. The cube's centre is placed at the crosshair by applying heading and vertical camera corrections. All markers on this viewer use those corrections; shared latitude/longitude stay unchanged. This also establishes an initial direction for relative orientation sensors, which continue following phone rotations afterwards.
 
 Use **Куб влево / вправо / выше / ниже** for roughly 0.5° screen adjustments, or the **Compass correction** and **Vertical camera correction** sliders below. **Сбросить поправку** clears these alignment offsets. Fresh GPS is required again if a selected participant goes stale; another participant is never automatically selected in their place. Keep the phone near horizontal when aligning, and reset a large correction before trying again. Recheck after moving, restarting or sensor drift. GPS errors can change with distance and surroundings, so this is a visual reference adjustment, not a precise GPS calibration. Field of view can be adjusted separately if a centred marker diverges near image edges.
@@ -85,7 +91,7 @@ Position and pose are uploaded and other devices polled once per second. Both `/
 ```sh
 cd commander-hq/backend
 .venv/bin/python -m pytest -q
-node --test tests/ar-math.test.mjs
+node --test tests/ar-math.test.mjs tests/gps-stability.test.mjs
 ```
 
 Browser smoke tests: start the backend on port 8765, then run `npm ci`, `npx playwright install chromium`, `npm test` and `npm run test:gps` in `commander-hq/ar-tests`. They use simulated media/GPS/orientation, not physical sensors. Physical iPhone/Android camera alignment, GPS accuracy and sensor calibration require a two-phone outdoor check. The local prototype shares positions with clients on its server and has no account authentication.

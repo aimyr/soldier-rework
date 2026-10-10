@@ -57,6 +57,7 @@
     <div class="cell"><div class="k">Heading / Azimuth (deg from N)</div><div class="v" id="hdg">—</div><div class="s" id="hdgSrc"></div></div>
     <div class="cell"><div class="k">Compass heading</div><div class="v" id="cmp">—</div><div class="s" id="cmpS"></div></div>
     <div class="cell"><div class="k">GPS course / Speed</div><div class="v" id="crs">—</div><div class="s" id="spd"></div></div>
+    <div class="cell wide"><div class="k">Motion / phone IMU</div><div class="v" id="motion">UNKNOWN</div><div class="s" id="motionInfo">Optional motion sensor helps detect stationary GPS drift.</div></div>
     <div class="cell wide"><div class="k">Upload to laptop</div><div class="s" id="tx">Not started</div></div>
   </div>
   <p id="msg"></p>
@@ -73,6 +74,11 @@ const MOVING_MPS = 1.0;             // above this, GNSS course is trusted over t
 const st = { deviceName:"", watchId:null, compass:null, compassAcc:null, last:null, lastSent:0,
              queue:[], log:[], sent:0, failed:0, wakeLock:null, follow:true,
              running:false, starting:false, generation:0, refreshTimer:null, refreshPending:false };
+st.motionTracker = null;
+st.motionListener = null;
+const motionReady = import("/ar-assets/gps-stability.mjs?v=stability-2")
+  .then(({ MotionTracker }) => { st.motionTracker = new MotionTracker(); return true; })
+  .catch(() => false);  // Motion assistance is optional; GPS remains available.
 
 // ---------------------------------------------------------------- device identity
 // Browsers do not expose the phone's own name, so each phone gets "<model>-<4 hex>"
@@ -184,9 +190,51 @@ function stopCompass() {
   window.removeEventListener("deviceorientationabsolute", onAbsOrientation, true);
 }
 
+// ------------------------------------------------------------- optional phone IMU
+async function requestMotionPermission() {
+  if (typeof DeviceMotionEvent === "undefined") return "unavailable";
+  if (typeof DeviceMotionEvent.requestPermission !== "function") return "granted";
+  try { return await DeviceMotionEvent.requestPermission(); } catch (_) { return "denied"; }
+}
+function motionTelemetry(now) {
+  return st.motionTracker?.telemetry(now) ?? { motion_state:"unknown", motion_unix_ms:null,
+    motion_age_ms:null, linear_accel_rms_mps2:null, rotation_rate_rms_dps:null };
+}
+function renderMotion(telemetry, unavailable = null) {
+  $("motion").textContent = unavailable ? unavailable.toUpperCase() : telemetry.motion_state.toUpperCase();
+  $("motionInfo").textContent = unavailable
+    ? "Motion assistance unavailable; GPS collection still works."
+    : `Phone IMU · accel RMS ${fmt(telemetry.linear_accel_rms_mps2, 2)} m/s² · rotation RMS ${fmt(telemetry.rotation_rate_rms_dps, 1)}°/s`;
+}
+async function enableMotion(generation, permission) {
+  const [loaded, allowed] = await Promise.all([motionReady, permission]);
+  if (!st.running || generation !== st.generation) return;
+  st.motionTracker?.reset();
+  if (!loaded || allowed !== "granted") {
+    renderMotion(motionTelemetry(Date.now()), allowed === "denied" ? "denied" : "unavailable");
+    return;
+  }
+  st.motionListener = (event) => {
+    if (!st.running || generation !== st.generation) return;
+    const now = Date.now();
+    st.motionTracker.sample(event, now);
+    renderMotion(motionTelemetry(now));
+  };
+  window.addEventListener("devicemotion", st.motionListener, true);
+  renderMotion(motionTelemetry(Date.now()));
+}
+function stopMotion() {
+  if (st.motionListener) window.removeEventListener("devicemotion", st.motionListener, true);
+  st.motionListener = null;
+  st.motionTracker?.reset();
+  $("motion").textContent = "UNKNOWN";
+  $("motionInfo").textContent = "Optional motion sensor helps detect stationary GPS drift.";
+}
+
 // ------------------------------------------------------------- geolocation
 function onPosition(pos) {
   const c = pos.coords;
+  const motion = motionTelemetry(Date.now());
   const f = {
     device_id: cleanId($("dev").value) || "Phone-" + randHex(2),
     device_name: st.deviceName || null,
@@ -200,6 +248,7 @@ function onPosition(pos) {
     alt_m: Number.isFinite(c.altitude) ? c.altitude : null,
     alt_accuracy_m: Number.isFinite(c.altitudeAccuracy) ? c.altitudeAccuracy : null,
     alt_reference: "wgs84",
+    ...motion,
   };
   const moving = f.speed_mps != null && f.speed_mps >= MOVING_MPS;
   let heading = null, src = "none";
@@ -208,6 +257,7 @@ function onPosition(pos) {
   else if (f.heading_gps_deg != null) { heading = f.heading_gps_deg; src = "source: GPS course"; }
   st.last = f;
   render(f, heading, src);
+  if (st.motionListener) renderMotion(motion);
   updateMap(f, heading);
   const now = Date.now();
   if (now - st.lastSent >= SEND_INTERVAL_MS) { st.lastSent = now; enqueue(f); }
@@ -246,6 +296,7 @@ async function flush() {
     while (st.queue.length && st.running && generation === st.generation) {
       const f = st.queue[0];
       const payload = { ...f, fix_age_ms: Math.max(0, Date.now() - f.fix_unix_ms) };
+      if (f.motion_unix_ms != null) payload.motion_age_ms = Math.min(86400000, Math.max(0, Date.now() - f.motion_unix_ms));
       const r = await fetch("/api/gps", { method:"POST", headers:{ "Content-Type":"application/json" },
                                            body:JSON.stringify(payload), cache:"no-store" });
       if (!st.running || generation !== st.generation) return;
@@ -261,7 +312,10 @@ async function flush() {
     $("tx").textContent = `sent ${st.sent} · queued ${st.queue.length} · invalid ${st.failed} · saved on phone ${st.log.length}`;
   }
 }
-setInterval(() => { if (st.running && st.queue.length) flush(); }, 3000);
+setInterval(() => {
+  if (st.running && st.motionListener) renderMotion(motionTelemetry(Date.now()));
+  if (st.running && st.queue.length) flush();
+}, 3000);
 
 // ------------------------------------------------------------- UI
 function fmt(v, d) { return v == null ? "—" : v.toFixed(d); }
@@ -292,6 +346,8 @@ async function start() {
     // before any asynchronous identity detection can consume that activation.
     const compassReady = window.isSecureContext && "geolocation" in navigator
       ? startCompass(generation) : Promise.resolve();
+    const motionPermission = window.isSecureContext && "geolocation" in navigator
+      ? requestMotionPermission() : Promise.resolve("unavailable");
     await deviceReady;
     if (generation !== st.generation) return;
     if (!window.isSecureContext) {
@@ -304,6 +360,9 @@ async function start() {
     if (generation !== st.generation) return;
     st.running = true;
     st.lastSent = 0;
+    // Permission was requested synchronously in the click. Loading the optional
+    // helper and enabling its listener do not delay the GPS watch.
+    void enableMotion(generation, motionPermission);
     st.watchId = navigator.geolocation.watchPosition(
       (pos) => { if (st.running && generation === st.generation) onPosition(pos); },
       (err) => { if (st.running && generation === st.generation) onPosError(err); },
@@ -325,6 +384,7 @@ async function start() {
       $("startBtn").disabled = false;
       if (!st.running) {
         stopCompass();
+        stopMotion();
         $("startBtn").textContent = "Start"; $("startBtn").className = "primary";
         $("dev").disabled = false;
       }
@@ -337,6 +397,7 @@ function stop() {
   if (st.watchId != null) navigator.geolocation.clearWatch(st.watchId);
   st.watchId = null;
   stopCompass();
+  stopMotion();
   st.wakeLock?.release?.(); st.wakeLock = null;
   pill("", "IDLE");
   $("startBtn").textContent = "Start"; $("startBtn").className = "primary";
@@ -349,6 +410,9 @@ $("csvBtn").addEventListener("click", () => {
                 ["heading_gps_course_deg","heading_gps_deg"],["heading_compass_deg","heading_compass_deg"],
                 ["compass_accuracy_deg","compass_accuracy_deg"],["speed_mps","speed_mps"],["altitude_m","alt_m"],
                 ["altitude_accuracy_m","alt_accuracy_m"],["phone_fix_unix_ms","fix_unix_ms"]];
+  cols.push(["motion_state","motion_state"],["motion_unix_ms","motion_unix_ms"],
+    ["motion_age_ms","motion_age_ms"],["linear_accel_rms_mps2","linear_accel_rms_mps2"],
+    ["rotation_rate_rms_dps","rotation_rate_rms_dps"]);
   const lines = [cols.map((c) => c[0]).join(",")].concat(st.log.map((f) => cols.map((c) => f[c[1]] ?? "").join(",")));
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob(["\ufeff" + lines.join("\n")], { type:"text/csv" }));

@@ -43,6 +43,7 @@ def test_api_roundtrip(tmp_path, monkeypatch):
         assert c.post("/api/gps", json=FIX | {"device_id": "x/../y"}).status_code == 422
         dev = c.get("/api/gps").json()["devices"][0]
         assert dev["device_id"] == "P1" and dev["track"] == [[37.5665, 126.978]]
+        assert dev["motion_state"] == "unknown" and dev["motion_age_s"] is None
         assert c.get("/api/state").json()["gps"]["devices"][0]["accuracy_m"] == 4.8
         assert c.get("/gps/pc").status_code == 200
         csv_r = c.get("/api/gps/csv")
@@ -72,7 +73,8 @@ def test_device_identity_and_conflict(tmp_path):
                                  "heading_compass_deg", "compass_accuracy_deg", "speed_mps",
                                  "alt_m", "alt_accuracy_m", "camera_heading_deg",
                                  "camera_pitch_deg", "camera_roll_deg", "fix_age_ms",
-                                 "orientation_age_ms"])
+                                 "orientation_age_ms", "motion_age_ms", "linear_accel_rms_mps2",
+                                 "rotation_rate_rms_dps"])
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
 def test_nonfinite_measurements_rejected(field, value):
     with pytest.raises(ValidationError):
@@ -82,7 +84,10 @@ def test_nonfinite_measurements_rejected(field, value):
 @pytest.mark.parametrize("invalid", [{"camera_pitch_deg": 91}, {"camera_roll_deg": -181},
                                     {"orientation_source": "gps"}, {"alt_reference": "sea"},
                                     {"alt_accuracy_m": -1}, {"compass_accuracy_deg": -1},
-                                    {"fix_age_ms": -1}, {"orientation_unix_ms": -1}])
+                                    {"fix_age_ms": -1}, {"orientation_unix_ms": -1},
+                                    {"motion_state": "walking"}, {"motion_unix_ms": -1},
+                                    {"motion_age_ms": 86_400_001}, {"linear_accel_rms_mps2": -1},
+                                    {"linear_accel_rms_mps2": 201}, {"rotation_rate_rms_dps": 2001}])
 def test_invalid_telemetry_rejected(invalid):
     with pytest.raises(ValidationError):
         GpsFix(**FIX | invalid)
@@ -202,3 +207,63 @@ def test_api_reordered_fix_and_capacity(tmp_path, monkeypatch):
         result = c.post("/api/gps", json=FIX | {"fix_unix_ms": FIX["fix_unix_ms"] - 1})
         assert result.status_code == 200 and result.json()["reason"] == "older_fix"
         assert c.post("/api/gps", json=FIX | {"device_id": "P2"}).status_code == 409
+
+
+def test_motion_age_is_independent_and_equal_fix_can_update_motion(tmp_path, monkeypatch):
+    clock = _clock(monkeypatch)
+    s = GpsStore(log_dir=tmp_path)
+    try:
+        first = s.ingest(GpsFix(**FIX | {"fix_age_ms": 2000, "motion_state": "still",
+            "motion_unix_ms": FIX["fix_unix_ms"], "motion_age_ms": 500,
+            "linear_accel_rms_mps2": .03, "rotation_rate_rms_dps": .4}))
+        assert first["motion_age_s"] == .5
+        clock["mono"] += 4
+        clock["wall"] += 4
+        # Motion heartbeat changes neither the position nor the original GPS age.
+        updated = s.ingest(GpsFix(**FIX | {"lat": 38, "fix_age_ms": 0, "motion_state": "moving",
+            "motion_unix_ms": FIX["fix_unix_ms"] + 4000, "motion_age_ms": 250,
+            "linear_accel_rms_mps2": 1.2, "rotation_rate_rms_dps": 15}))
+        assert updated["motion_state"] == "moving" and updated["motion_age_s"] == .2
+        assert updated["lat"] == FIX["lat"] and updated["fix_age_s"] == 6
+        clock["mono"] += 5
+        clock["wall"] += 100_000  # elapsed ages survive a server wall-clock correction
+        snapshot = s.snapshot()["devices"][0]
+        assert snapshot["fix_age_s"] == 11 and snapshot["stale"]
+        assert snapshot["motion_age_s"] == 5.2 and snapshot["motion_state"] == "moving"
+        assert len(snapshot["track"]) == 1
+    finally:
+        s.close()
+    with s.csv_path.open(encoding="utf-8-sig") as file:
+        logged = list(csv.DictReader(file))
+    assert logged[-1]["motion_state"] == "moving"
+    assert logged[-1]["linear_accel_rms_mps2"] == "1.2"
+    assert logged[-1]["rotation_rate_rms_dps"] == "15.0"
+    assert logged[-1]["client_motion_age_ms"] == "250.0"
+
+
+def test_motion_timestamp_ties_and_older_motion_preserve_state_age(tmp_path, monkeypatch):
+    clock = _clock(monkeypatch)
+    s = GpsStore(log_dir=tmp_path)
+    try:
+        s.ingest(GpsFix(**FIX | {"motion_state": "still", "motion_unix_ms": FIX["fix_unix_ms"] + 1000,
+            "motion_age_ms": 0, "linear_accel_rms_mps2": .04, "rotation_rate_rms_dps": .5}))
+        clock["mono"] += 2
+        tied = s.ingest(GpsFix(**FIX | {"motion_state": "moving",
+            "motion_unix_ms": FIX["fix_unix_ms"] + 1000, "motion_age_ms": 0,
+            "linear_accel_rms_mps2": 10, "rotation_rate_rms_dps": 100}))
+        assert tied["motion_state"] == "still" and tied["motion_age_s"] == 2
+        clock["mono"] += 3
+        newer_gps = s.ingest(GpsFix(**FIX | {"fix_unix_ms": FIX["fix_unix_ms"] + 5000,
+            "fix_age_ms": 0, "motion_state": "moving", "motion_unix_ms": FIX["fix_unix_ms"],
+            "motion_age_ms": 0, "linear_accel_rms_mps2": 10, "rotation_rate_rms_dps": 100}))
+        assert newer_gps["fix_age_s"] == 0 and newer_gps["motion_age_s"] == 5
+        assert newer_gps["motion_state"] == "still" and newer_gps["linear_accel_rms_mps2"] == .04
+        clock["mono"] += 1
+        missing = s.ingest(GpsFix(**FIX | {"fix_unix_ms": FIX["fix_unix_ms"] + 6000, "fix_age_ms": 0}))
+        assert missing["motion_state"] == "still" and missing["motion_age_s"] == 6
+        invalidated = s.ingest(GpsFix(**FIX | {"fix_unix_ms": FIX["fix_unix_ms"] + 6000,
+            "motion_state": "unknown", "motion_unix_ms": FIX["fix_unix_ms"] + 6000, "motion_age_ms": 0}))
+        assert invalidated["motion_state"] == "unknown" and invalidated["motion_age_s"] == 0
+        assert invalidated["linear_accel_rms_mps2"] is None and invalidated["rotation_rate_rms_dps"] is None
+    finally:
+        s.close()

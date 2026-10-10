@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#090e18">
   <title>Soldier Rework · Phone AR</title>
-  <link rel="stylesheet" href="/ar-assets/ar.css?v=alignment-1">
+  <link rel="stylesheet" href="/ar-assets/ar.css?v=stability-2">
 </head>
 <body>
   <header>
@@ -24,7 +24,7 @@
       </div>
       <div id="crosshair" aria-hidden="true">+</div>
       <button id="align-target-camera" class="primary" hidden disabled>Совместить</button>
-      <div class="bottom-hud"><span id="heading">Heading —</span><span id="gps">GPS —</span><span id="height">Height —</span></div>
+      <div class="bottom-hud"><span id="heading">Heading —</span><span id="gps">GPS —</span><span id="height">Height —</span><span id="motion-status">IMU —</span></div>
     </section>
     <div class="controls">
       <label class="identity">Phone ID<input id="device-id" maxlength="32" pattern="[A-Za-z0-9_-]+" autocomplete="off" aria-label="Phone ID"></label>
@@ -53,6 +53,8 @@
     <details id="settings">
       <summary>Camera &amp; height settings <span>Adjust alignment</span></summary>
       <div class="settings-grid">
+        <label class="check"><input id="use-stability" type="checkbox" checked> Стабилизировать GPS с учётом движения телефона</label>
+        <p class="stability-note">Датчики помогают сглаживать дрожание GPS, особенно в покое. Исходные координаты сохраняются. Без доступа к датчикам работает сглаживание по GPS; при движении возможна небольшая задержка.</p>
         <label>Horizontal field of view <output id="fov-value">65°</output><input id="fov" type="range" min="25" max="100" value="65"></label>
         <label>Compass correction <output id="yaw-value">0°</output><input id="yaw" type="range" min="-180" max="180" step="0.1" value="0"></label>
         <label>Vertical camera correction <output id="pitch-value">0°</output><input id="pitch" type="range" min="-90" max="90" step="0.1" value="0"></label>
@@ -74,6 +76,6 @@
     <p class="footnote">GPS AR is approximate. Cubes get smaller with distance. They can appear through walls; the camera does not detect people or surfaces. Missing or noisy height uses a flat position.</p>
     <a class="gps-link" href="/gps">Use GPS sharing without the camera ↗</a>
   </main>
-  <script type="module" src="/ar-assets/ar-app.mjs?v=alignment-1"></script>
+  <script type="module" src="/ar-assets/ar-app.mjs?v=stability-2"></script>
 </body>
 </html>

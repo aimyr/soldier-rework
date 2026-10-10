@@ -32,16 +32,16 @@ async function context(options = {}) {
 
 async function pageIn(ctx, mock = {}) {
   // No operating-system camera or location permission is touched by these tests.
-  await ctx.addInitScript(({lat, lon, cameraDenied, motionDenied}) => {
+  await ctx.addInitScript(({lat, lon, accuracy, cameraDenied, motionDenied, imuDenied}) => {
     const state = window.__arSmoke = {
-      lat, lon, altitude: 54, watchCalls: 0, watchDeliveries: 0,
+      lat, lon, accuracy, speed: 0, altitude: 54, watchCalls: 0, watchDeliveries: 0,
       currentCalls: 0, clearCalls: 0, cameraCalls: 0, stopCalls: 0,
-      watches: new Map(), tracks: [], cubes: [],
+      watches: new Map(), tracks: [], cubes: [], permissions: [], motionListeners: new Set(),
     };
-    const position = () => ({timestamp: Date.now(), coords: {
-      latitude: state.lat, longitude: state.lon, accuracy: 2,
-      altitude: state.altitude, altitudeAccuracy: 1, heading: null, speed: 0,
-    }});
+    const position = () => state.lastPosition = {timestamp: state.frozenTimestamp ?? Date.now(), coords: {
+      latitude: state.lat, longitude: state.lon, accuracy: state.accuracy,
+      altitude: state.altitude, altitudeAccuracy: 1, heading: null, speed: state.speed,
+    }};
     const deliver = callback => { state.watchDeliveries++; callback(position()); };
     Object.defineProperty(navigator, 'geolocation', {configurable: true, value: {
       watchPosition(success) {
@@ -59,17 +59,49 @@ async function pageIn(ctx, mock = {}) {
     state.move = (newLat, newLon = state.lon) => {
       state.lat = newLat; state.lon = newLon;
       for (const callback of state.watches.values()) deliver(callback);
+      return state.lastPosition;
     };
     Object.defineProperty(DeviceOrientationEvent, 'requestPermission', {
-      configurable: true, value: async () => motionDenied ? 'denied' : 'granted',
+      configurable: true, value: async () => {
+        state.permissions.push({type: 'orientation', active: navigator.userActivation.isActive});
+        return motionDenied ? 'denied' : 'granted';
+      },
+    });
+    Object.defineProperty(DeviceMotionEvent, 'requestPermission', {
+      configurable: true, value: async () => {
+        state.permissions.push({type: 'motion', active: navigator.userActivation.isActive});
+        return imuDenied ? 'denied' : 'granted';
+      },
     });
     // Chromium without physical sensors emits its own initial null sample. Keep
     // that platform sample out of a test whose entire sensor source is mocked.
-    for (const type of ['deviceorientation', 'deviceorientationabsolute']) {
+    for (const type of ['deviceorientation', 'deviceorientationabsolute', 'devicemotion']) {
       window.addEventListener(type, event => {
         if (!event.__arSmokeSensor) event.stopImmediatePropagation();
       }, true);
     }
+    const addListener = window.addEventListener.bind(window), removeListener = window.removeEventListener.bind(window);
+    window.addEventListener = (type, callback, options) => {
+      if (type === 'devicemotion') state.motionListeners.add(callback);
+      return addListener(type, callback, options);
+    };
+    window.removeEventListener = (type, callback, options) => {
+      if (type === 'devicemotion') state.motionListeners.delete(callback);
+      return removeListener(type, callback, options);
+    };
+    state.motion = (acceleration = 0, rotation = 0) => {
+      const event = new DeviceMotionEvent('devicemotion', {
+        acceleration: {x: acceleration, y: 0, z: 0},
+        rotationRate: {alpha: rotation, beta: 0, gamma: 0}, interval: 100,
+      });
+      Object.defineProperty(event, '__arSmokeSensor', {value: true});
+      window.dispatchEvent(event);
+    };
+    state.startMotion = (acceleration = 0, rotation = 0) => {
+      clearInterval(state.motionTimer);
+      state.motion(acceleration, rotation);
+      state.motionTimer = setInterval(() => state.motion(acceleration, rotation), 100);
+    };
     Object.defineProperty(navigator.mediaDevices, 'getUserMedia', {configurable: true, value: async constraints => {
       state.cameraCalls++;
       if (cameraDenied) throw new DOMException('Camera access denied', 'NotAllowedError');
@@ -134,7 +166,7 @@ async function pageIn(ctx, mock = {}) {
         return original.apply(this, args);
       };
     }
-  }, {lat: origin.lat, lon: origin.lon, cameraDenied: false, motionDenied: false, ...mock});
+  }, {lat: origin.lat, lon: origin.lon, accuracy: 2, cameraDenied: false, motionDenied: false, imuDenied: false, ...mock});
   const page = await ctx.newPage();
   page.on('pageerror', error => pageErrors.push(error.message));
   const requests = [];
@@ -150,13 +182,14 @@ async function pageIn(ctx, mock = {}) {
 async function filterParticipants(ctx, ids) {
   // Keep repeat runs isolated from other phones already sharing this backend.
   // POST requests still reach the real GPS store; only the displayed snapshot is filtered.
-  const control = {staleIds: new Set()};
+  const control = {staleIds: new Set(), latest: []};
   await ctx.route('**/api/gps', async route => {
     if (route.request().method() !== 'GET') return route.continue();
     const response = await route.fetch();
     const snapshot = await response.json();
     const devices = snapshot.devices.filter(d => ids.includes(d.device_id)).map(device =>
       control.staleIds.has(device.device_id) ? {...device, stale: true, fix_age_s: 60} : device);
+    control.latest = devices;
     await route.fulfill({response, json: {...snapshot, devices}});
   });
   return control;
@@ -167,6 +200,12 @@ async function begin(page, id, alpha = 0, absolute = true) {
   await page.locator('#start').click();
   await page.waitForFunction(() => document.getElementById('mode').textContent === 'LIVE · GPS AR');
   await page.evaluate(({alpha, absolute}) => window.__arSmoke.orient(alpha, absolute), {alpha, absolute});
+}
+
+async function useRawGps(page) {
+  await page.locator('#settings').evaluate(node => { node.open = true; });
+  await page.locator('#use-stability').uncheck();
+  await page.locator('#settings').evaluate(node => { node.open = false; });
 }
 
 const count = page => page.locator('#count').textContent();
@@ -219,6 +258,7 @@ try {
   const snapshotA = await filterParticipants(ctxA, ['Browser-A', 'Browser-B']);
   await filterParticipants(ctxB, ['Browser-A', 'Browser-B']);
   const pageA = await pageIn(ctxA), pageB = await pageIn(ctxB, {lat: northLatitude(20)});
+  await useRawGps(pageA); await useRawGps(pageB);
   await begin(pageA, 'Browser-A', 0);
   await begin(pageB, 'Browser-B', 180);
   await eventually(() => rows(pageA), devices => ['Browser-A', 'Browser-B'].every(id => devices.some(d => d.device_id === id && d.orientation_source === 'absolute')), 'Backend receives both absolute camera poses');
@@ -328,6 +368,7 @@ try {
   const relativeCtx = await context();
   await filterParticipants(relativeCtx, ['Browser-A', 'Browser-B', 'Browser-relative']);
   const relative = await pageIn(relativeCtx);
+  await useRawGps(relative);
   await begin(relative, 'Browser-relative', 340, false);
   await eventually(() => relative.locator('#heading').textContent(), value => value === 'Heading —', 'Relative orientation requires calibration');
   await eventually(() => relative.locator('#alignment-target option[value="Browser-B"]').count(), value => value === 1, 'Fresh reference phone is available to relative sensors');
@@ -363,6 +404,130 @@ try {
   await pageB.locator('#start').click();
   console.log('PASS relative sensors: known-direction calibration publishes north and follows a 90° rotation');
 
+  const fusionAContext = await context(), fusionBContext = await context(), rawContext = await context();
+  const fusionASnapshot = await filterParticipants(fusionAContext, ['Fusion-A', 'Fusion-B']);
+  await filterParticipants(fusionBContext, ['Fusion-A', 'Fusion-B']);
+  const rawSnapshot = await filterParticipants(rawContext, ['Fusion-raw', 'Fusion-B']);
+  const fusionA = await pageIn(fusionAContext, {accuracy: 8});
+  const fusionB = await pageIn(fusionBContext, {lat: northLatitude(40), accuracy: 8});
+  const rawViewer = await pageIn(rawContext, {accuracy: 8});
+  assert.equal(await fusionA.locator('#use-stability').isChecked(), true, 'Stabilisation is enabled by default');
+  await begin(fusionA, 'Fusion-A', 0); await begin(fusionB, 'Fusion-B', 180);
+  await begin(rawViewer, 'Fusion-raw', 0);
+  await eventually(() => count(rawViewer), value => value === '1 in view', 'Unknown IMU data does not block camera GPS AR');
+  assert.match(await rawViewer.locator('#motion-status').textContent(), /нет свежих данных/);
+  await useRawGps(rawViewer);
+  for (const page of [fusionA, fusionB]) {
+    assert.deepEqual(await page.evaluate(() => window.__arSmoke.permissions), [
+      {type: 'orientation', active: true}, {type: 'motion', active: true},
+    ], 'Both permissions are invoked while the Start click supplies user activation');
+    await page.evaluate(() => window.__arSmoke.startMotion());
+    await eventually(() => page.locator('#motion-status').textContent(), text => text.includes('покой'), 'Continuous quiet IMU samples establish stillness');
+  }
+  await eventually(() => rows(fusionA), devices => ['Fusion-A', 'Fusion-B'].every(id => devices.some(device =>
+    device.device_id === id && device.motion_state === 'still' && device.motion_age_s < 1.5)), 'Both phones publish their own fresh motion samples');
+
+  const eastLongitude = metres => origin.lon + metres / (111000 * Math.cos(origin.lat * Math.PI / 180));
+  const stablePath = [], rawPath = [];
+  for (const metres of [4, -4, 4, -4, 4, -4]) {
+    const fix = await fusionB.evaluate(({lat, lon}) => window.__arSmoke.move(lat, lon),
+      {lat: northLatitude(40), lon: eastLongitude(metres)});
+    const backendRow = await eventually(() => rows(fusionA), devices => devices.some(device =>
+      device.device_id === 'Fusion-B' && device.lon === fix.coords.longitude && device.fix_unix_ms >= fix.timestamp), 'Raw jitter fix reaches backend');
+    const row = backendRow.find(device => device.device_id === 'Fusion-B');
+    const uploaded = fusionB.__gpsRequests.filter(request => request.method === 'POST').map(request => JSON.parse(request.body))
+      .findLast(body => body.fix_unix_ms === row.fix_unix_ms);
+    assert.ok(uploaded, 'Backend GPS timestamp corresponds to a raw phone upload');
+    assert.deepEqual([row.lat, row.lon, row.accuracy_m, row.fix_unix_ms],
+      [uploaded.lat, uploaded.lon, uploaded.accuracy_m, uploaded.fix_unix_ms], 'Stabilisation never rewrites stored raw GPS fields');
+    for (const snapshot of [fusionASnapshot, rawSnapshot]) {
+      await eventually(() => snapshot.latest.find(device => device.device_id === 'Fusion-B'),
+        device => device && device.lon === fix.coords.longitude && device.fix_unix_ms >= fix.timestamp, 'Viewer receives the jitter fix');
+    }
+    await fusionA.waitForTimeout(150);
+    stablePath.push((await cubeCenter(fusionA)).centerX); rawPath.push((await cubeCenter(rawViewer)).centerX);
+    await fusionA.waitForTimeout(450);
+  }
+  const travelled = path => path.slice(1).reduce((sum, point, index) => sum + Math.abs(point - path[index]), 0);
+  assert.ok(travelled(stablePath) < travelled(rawPath) * 0.65,
+    `Still-phone cube jitter is reduced: stable ${travelled(stablePath)}, raw ${travelled(rawPath)}`);
+  console.log(`PASS IMU permissions, unknown fallback, two-phone telemetry, raw GPS preservation, stationary cube jitter reduction (${travelled(stablePath).toFixed(1)} px vs ${travelled(rawPath).toFixed(1)} px)`);
+
+  await fusionB.evaluate(() => { window.__arSmoke.speed = 5; window.__arSmoke.startMotion(1, 25); });
+  await eventually(() => fusionB.locator('#motion-status').textContent(), text => text.includes('движение'), 'Moving IMU is reflected in the HUD');
+  const beforeTravel = (await cubeCenter(fusionA)).centerX;
+  for (const metres of [2, 8, 14]) {
+    const fix = await fusionB.evaluate(({lat, lon}) => window.__arSmoke.move(lat, lon),
+      {lat: northLatitude(40), lon: eastLongitude(metres)});
+    for (const snapshot of [fusionASnapshot, rawSnapshot]) {
+      await eventually(() => snapshot.latest.find(device => device.device_id === 'Fusion-B'),
+        device => device && device.lon === fix.coords.longitude && device.fix_unix_ms >= fix.timestamp, 'Viewer follows actual moving GPS');
+    }
+    await fusionA.waitForTimeout(600);
+  }
+  const movingStable = await cubeCenter(fusionA), movingRaw = await cubeCenter(rawViewer);
+  assert.ok(movingStable.centerX - beforeTravel > 100, 'Moving participant is followed rather than frozen');
+  assert.ok(Math.abs(movingStable.centerX - movingRaw.centerX) < 45, 'Moving mode has bounded display lag');
+  const motionRows = await rows(fusionA);
+  const stillRow = motionRows.find(device => device.device_id === 'Fusion-A');
+  const movingRow = motionRows.find(device => device.device_id === 'Fusion-B');
+  assert.equal(stillRow.motion_state, 'still'); assert.equal(stillRow.linear_accel_rms_mps2, 0);
+  assert.equal(movingRow.motion_state, 'moving'); assert.ok(movingRow.linear_accel_rms_mps2 > 0.45);
+  assert.ok(movingRow.rotation_rate_rms_dps > 12);
+  for (const row of [stillRow, movingRow]) {
+    assert.ok(row.motion_unix_ms <= Date.now() && Date.now() - row.motion_unix_ms < 2500);
+  }
+  console.log('PASS moving IMU/GPS: cube follows travel with bounded lag and telemetry remains attached to the correct phone');
+
+  const frozenTimestamp = await fusionA.evaluate(({lat, lon}) => {
+    const fix = window.__arSmoke.move(lat, lon);
+    window.__arSmoke.frozenTimestamp = fix.timestamp;
+    return fix.timestamp;
+  }, origin);
+  await fusionA.waitForTimeout(11100);
+  await eventually(() => count(fusionA), value => value === '0 in view', 'Fresh IMU does not keep old GPS cubes alive');
+  assert.match(await fusionA.locator('#gps').textContent(), /stale/);
+  assert.match(await fusionA.locator('#motion-status').textContent(), /покой/);
+  const staleRow = (await rows(fusionA)).find(device => device.device_id === 'Fusion-A');
+  assert.equal(staleRow.fix_unix_ms, frozenTimestamp); assert.ok(staleRow.fix_age_s > 10 && staleRow.stale);
+  const expiredUploadCount = uploads(fusionA);
+  await fusionA.waitForTimeout(1300);
+  assert.equal(uploads(fusionA), expiredUploadCount, 'Sensor updates do not restart uploads with expired GPS');
+  await fusionA.locator('#start').click();
+  assert.equal(await fusionA.evaluate(() => window.__arSmoke.motionListeners.size), 0, 'Stop removes the IMU listener');
+  assert.equal(await fusionA.locator('#motion-status').textContent(), 'IMU —');
+  await fusionA.evaluate(() => { window.__arSmoke.frozenTimestamp = null; });
+  const restartUploadIndex = fusionA.__gpsRequests.length;
+  await begin(fusionA, 'Fusion-A', 0);
+  await eventually(() => fusionA.__gpsRequests.slice(restartUploadIndex).filter(request => request.method === 'POST'),
+    requests => requests.length > 0, 'Restart sends a fresh GPS fix');
+  const restartedMotion = fusionA.__gpsRequests.slice(restartUploadIndex).filter(request => request.method === 'POST')
+    .map(request => JSON.parse(request.body));
+  assert.equal(restartedMotion[0].motion_state, 'unknown', 'Restart clears the prior stillness classification');
+  for (const page of [fusionA, fusionB, rawViewer]) {
+    await page.locator('#start').click();
+    assert.equal(await page.evaluate(() => window.__arSmoke.motionListeners.size), 0);
+    assert.ok(await page.evaluate(() => window.__arSmoke.tracks.every(track => track.readyState === 'ended')));
+    assert.equal(await page.evaluate(() => window.__arSmoke.watches.size), 0);
+  }
+  const fusionStoppedUploads = [fusionA, fusionB, rawViewer].map(uploads);
+  await fusionA.waitForTimeout(1300);
+  assert.deepEqual([fusionA, fusionB, rawViewer].map(uploads), fusionStoppedUploads);
+  console.log('PASS GPS age independence, IMU listener cleanup, reset on restart, no uploads after Stop');
+
+  const imuDeniedContext = await context(), imuDeniedPage = await pageIn(imuDeniedContext, {imuDenied: true});
+  await begin(imuDeniedPage, 'Fusion-denied', 0);
+  await imuDeniedPage.evaluate(() => window.__arSmoke.startMotion(1, 25));
+  await eventually(() => rows(imuDeniedPage), devices => devices.some(device => device.device_id === 'Fusion-denied'), 'IMU denial still allows raw GPS sharing');
+  const deniedMotionRow = (await rows(imuDeniedPage)).find(device => device.device_id === 'Fusion-denied');
+  assert.equal(deniedMotionRow.motion_state, 'unknown'); assert.equal(deniedMotionRow.motion_unix_ms, null);
+  assert.equal(deniedMotionRow.camera_heading_deg, 0);
+  assert.equal(await imuDeniedPage.locator('#mode').textContent(), 'LIVE · GPS AR');
+  await eventually(() => imuDeniedPage.locator('#motion-status').textContent(), text => text.includes('нет доступа'), 'Denied IMU access appears in the HUD');
+  assert.equal(await imuDeniedPage.evaluate(() => window.__arSmoke.motionListeners.size), 0);
+  await imuDeniedPage.locator('#start').click();
+  console.log('PASS IMU permission denied: camera and raw GPS sharing continue, denied motion samples are ignored');
+
   assert.deepEqual(pageErrors, [], 'No unhandled browser runtime errors');
   console.log('AR browser smoke checks passed.');
 } catch (error) {
@@ -381,6 +546,7 @@ try {
         cubes: window.__arSmoke?.cubes,
         hidden: document.hidden,
         gps: document.getElementById('gps')?.textContent,
+        motion: document.getElementById('motion-status')?.textContent,
         calls: window.__arSmoke && {watch: window.__arSmoke.watchCalls, current: window.__arSmoke.currentCalls,
           clear: window.__arSmoke.clearCalls, stop: window.__arSmoke.stopCalls},
       })));

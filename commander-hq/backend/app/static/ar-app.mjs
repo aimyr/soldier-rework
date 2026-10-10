@@ -1,4 +1,5 @@
 import {relativePosition, cameraBasis, projectPoint, cubeSegments, orientationFromEvent, alignmentCorrection} from './ar-math.mjs?v=alignment-1';
+import {MotionTracker, GpsStabilizer} from './gps-stability.mjs?v=stability-2';
 
 const $ = id => document.getElementById(id);
 const video = $('camera'), canvas = $('overlay'), ctx = canvas.getContext('2d');
@@ -16,6 +17,8 @@ let manualFov = false;
 let networkMessage = '', sensorMessage = '', cameraWarning = '', lastHud = 0;
 let alignmentChoices = '', targetRelativeCalibration = false;
 const requests = new Set();
+const motionTracker = new MotionTracker(), gpsStabilizer = new GpsStabilizer();
+let motionAccess = 'unknown';
 
 function persistentId() {
   let stored;
@@ -54,6 +57,16 @@ function updateLiveStatus() {
   status(problems.join(' ') || 'Sharing GPS and camera direction. Other phones on /ar or /gps appear here.', problems.length > 0);
 }
 function screenAngle() { return screen.orientation?.angle ?? window.orientation ?? 0; }
+function onMotion(event) {
+  if (mode !== 'live' && mode !== 'starting') return;
+  motionTracker.sample(event);
+}
+function updateMotionStatus() {
+  const sample = motionTracker.telemetry();
+  const labels = {still: 'покой', moving: 'движение', unknown: 'нет свежих данных'};
+  $('motion-status').textContent = mode === 'demo' ? 'IMU · demo' : mode !== 'live' ? 'IMU —'
+    : motionAccess === 'denied' ? 'IMU · нет доступа' : `IMU · ${labels[sample.motion_state]}`;
+}
 function onOrientation(event) {
   if (mode !== 'live' && mode !== 'starting') return;
   if (pose?.source === 'absolute' && event.absolute !== true && !finite(event.webkitCompassHeading)) return;
@@ -91,7 +104,7 @@ async function request(url, options = {}) {
 function payload() {
   if (!fixFresh()) return null;
   const camera = currentPose();
-  return {...ownFix, fix_age_ms: Math.max(0, Date.now() - ownFix.fix_unix_ms),
+  return {...ownFix, ...motionTracker.telemetry(), fix_age_ms: Math.max(0, Date.now() - ownFix.fix_unix_ms),
     camera_heading_deg: camera?.headingDeg ?? null, camera_pitch_deg: camera?.pitchDeg ?? null,
     camera_roll_deg: camera?.rollDeg ?? null, orientation_unix_ms: camera ? poseAt : Date.now(),
     orientation_age_ms: camera ? Math.max(0, Date.now() - poseAt) : 0,
@@ -131,8 +144,17 @@ function targets() {
     finite(d.lat) && finite(d.lon) && (mode === 'demo' || (d.fix_age_s ?? d.age_s ?? 999) + (Date.now() - (d.snapshot_received_ms ?? 0)) / 1000 < 10));
 }
 function relative(target) {
-  return relativePosition(ownFix, target, {useAltitude: $('use-height').checked,
+  return relativePosition(displayPosition(ownFix), displayPosition(target), {useAltitude: $('use-height').checked,
     altitudeOffsetM: -number('altitude-offset', 0, -100, 100), maxAltitudeAccuracyM: number('max-alt-error', 15, 1, 50)});
+}
+function displayPosition(fix) {
+  if (!fix || mode === 'demo' || !$('use-stability').checked) return fix;
+  const elapsedMs = Math.max(0, Date.now() - (fix.snapshot_received_ms ?? Date.now()));
+  const sample = fix === ownFix ? {...fix, ...motionTracker.telemetry()} : {...fix,
+    motion_age_ms: finite(fix.motion_age_s) ? fix.motion_age_s * 1000 + elapsedMs : null};
+  // Stabilization affects this phone's display only. Uploads and the GPS store
+  // retain the original coordinates, timestamp and reported uncertainty.
+  return gpsStabilizer.position(sample) ?? fix;
 }
 function updateNearby() {
   const list = $('nearby');
@@ -287,6 +309,7 @@ function draw(time) {
     $('gps').textContent = ownFix ? `GPS ±${Math.round(ownFix.accuracy_m)} m${!fixFresh() && mode !== 'demo' ? ' · stale' : ''}` : 'GPS —';
     $('height').textContent = heightUsed ? `Height · ${heightUsed} markers` : 'Height · flat fallback';
     updateNearby(); updateLiveStatus();
+    updateMotionStatus();
   }
 }
 function stop(message = 'Stopped. Camera and GPS sharing are off.') {
@@ -298,6 +321,8 @@ function stop(message = 'Stopped. Camera and GPS sharing are off.') {
   requests.forEach(c => c.abort()); requests.clear();
   window.removeEventListener('deviceorientation', onOrientation);
   window.removeEventListener('deviceorientationabsolute', onOrientation);
+  window.removeEventListener('devicemotion', onMotion);
+  motionTracker.reset(); gpsStabilizer.reset(); motionAccess = 'unknown';
   if (animation !== null) cancelAnimationFrame(animation); animation = null;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ownFix = null; devices = []; pose = null; lastEvent = null; calibrationOffset = null; webkitOffset = null; webkitOffsetAt = 0; targetRelativeCalibration = false;
@@ -307,7 +332,7 @@ function stop(message = 'Stopped. Camera and GPS sharing are off.') {
   $('start').textContent = 'Start camera + GPS'; $('start').classList.remove('stop');
   $('mode').textContent = 'STANDBY'; $('count').textContent = '0 in view';
   $('heading').textContent = 'Heading —'; $('gps').textContent = 'GPS —'; $('height').textContent = 'Height —';
-  $('nearby').replaceChildren(); updateAlignmentTargets([]); status(message);
+  $('nearby').replaceChildren(); updateAlignmentTargets([]); updateMotionStatus(); status(message);
 }
 function activate(nextMode) {
   mode = nextMode; $('view').className = nextMode; $('welcome').hidden = true;
@@ -331,6 +356,7 @@ async function start() {
   if (!navigator.mediaDevices?.getUserMedia || !navigator.geolocation) { status('This browser does not support camera or geolocation. Try Safari on iPhone or Chrome on Android.', true); return; }
   try { localStorage.setItem('squad_gps_device_id', id); } catch { /* session identity */ }
   mode = 'starting'; const token = ++generation;
+  motionTracker.reset(); gpsStabilizer.reset(); motionAccess = 'unknown';
   $('start').disabled = true; $('demo').disabled = true; $('device-id').disabled = true;
   status('Allow camera, location and motion access to start.');
   // Invoke iOS permission while the button click still supplies user activation.
@@ -338,9 +364,16 @@ async function start() {
   try { orientationPermission = typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'
     ? DeviceOrientationEvent.requestPermission(true) : Promise.resolve('granted'); }
   catch { orientationPermission = Promise.resolve('denied'); }
+  let motionPermission;
+  try { motionPermission = typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function'
+    ? DeviceMotionEvent.requestPermission() : Promise.resolve('granted'); }
+  catch { motionPermission = Promise.resolve('denied'); }
   try {
-    const permission = await orientationPermission.catch(() => 'denied');
+    const [permission, motionResult] = await Promise.all([
+      orientationPermission.catch(() => 'denied'), motionPermission.catch(() => 'denied')]);
     if (token !== generation) return;
+    motionAccess = motionResult;
+    if (motionResult === 'granted') window.addEventListener('devicemotion', onMotion);
     if (permission !== 'granted') sensorMessage = 'Motion permission denied. Enable it in browser settings and restart to draw cubes.';
     window.addEventListener('deviceorientationabsolute', onOrientation);
     window.addEventListener('deviceorientation', onOrientation);
@@ -420,6 +453,10 @@ $('reset-alignment').addEventListener('click', () => {
   updateAlignmentTargets();
 });
 document.querySelectorAll('[data-nudge]').forEach(button => button.addEventListener('click', () => nudge(button.dataset.nudge)));
+$('use-stability').addEventListener('change', () => {
+  gpsStabilizer.reset();
+  $('alignment-message').textContent = 'Режим GPS изменён. Если куб сместился, повтори совмещение по человеку.';
+});
 $('calibrate').addEventListener('click', () => {
   if (mode !== 'live' || !lastEvent) { status('Start on a phone and allow motion access before setting a direction.', true); return; }
   const known = number('known-heading', 0, 0, 359), raw = orientationFromEvent(lastEvent, screenAngle());

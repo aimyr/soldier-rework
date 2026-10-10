@@ -21,6 +21,8 @@ Height is used when both phones provide an altitude with a matching reference an
 
 On the viewing phone, **Калибровка по человеку** lets you select a participant, aim the central crosshair at them and press **Совместить**. This aligns the GPS cube by adjusting camera heading and tilt. Arrow buttons provide fine adjustments; **Сбросить поправку** clears them. Repeat when GPS drifts or after changing location. Alignment does not improve either phone's GPS coordinates.
 
+Phone motion readings also accompany GPS: allow motion access on both `/gps` and `/ar`. The viewer's **Стабилизировать GPS с учётом движения телефона** setting smooths positions using GPS time/accuracy and recent motion readings. Raw coordinates remain available in the API and logs. This reduces some jitter and may add a small tracking delay; it does not remove a systematic GPS error. Missing motion sensors fall back to GPS-based smoothing.
+
 See [phone setup, certificate trust, calibration and tests](commander-hq/README.md#phone-ar-and-gps-sharing).
 
 ## Original Squad HUD projects

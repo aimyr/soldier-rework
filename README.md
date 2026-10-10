@@ -1,4 +1,27 @@
-# Squad HUD
+# Soldier Rework
+
+Fork of [Squad HUD](https://github.com/csihyeon05/D4D-x-EDTH-Hackathon---Team.-Squad-HUD), preserving the original branches and history. The default `soldier-rework` branch adds phone GPS AR; the original firmware and commander projects remain below.
+
+## Phone camera AR
+
+Every phone shares its GPS position and rear-camera orientation with the laptop. Open `/ar` on each phone to see the others as **thin blue wireframe cubes**. A cube has a fixed physical size, so it gets smaller with distance. Your own GPS position, camera heading, pitch and roll determine the projection; another phone's direction rotates its cube.
+
+**macOS / Linux:**
+
+```sh
+cd commander-hq
+./run_ar.sh                  # or ./run_ar.sh YOUR_LAPTOP_WIFI_IP
+```
+
+**Windows:** double-click `commander-hq/RUN_AR.bat`.
+
+Connect phones and laptop to the same Wi-Fi or hotspot. The launcher prints `https://LAPTOP_IP:8443/ar`. Trust the generated local certificate on the phones, then tap **Start camera + GPS** and allow camera, location and motion access. Use **Try demo** to preview three simulated phones without permissions or GPS uploads. Angular and firmware builds are not needed for this page.
+
+Height is used when both phones provide an altitude with a matching reference and acceptable vertical accuracy (15 m by default). Missing or noisy height falls back to a flat position; settings include a manual altitude correction. GPS and compass errors still affect marker placement. This is approximate GPS AR, with no person recognition, surface tracking or wall occlusion.
+
+See [phone setup, certificate trust, calibration and tests](commander-hq/README.md#phone-ar-and-gps-sharing).
+
+## Original Squad HUD projects
 
 D4D x EDTH hackathon prototype. Soldier-worn sensor nodes report anomalies over BLE to an offline commander laptop, which shows squad status on a map.
 

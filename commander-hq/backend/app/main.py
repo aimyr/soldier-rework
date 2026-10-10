@@ -7,14 +7,16 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import config
 from .briefing import Briefer
 from .engine import Engine
+from .gps import GpsCapacityError, GpsFix, GpsStore
 from .protocol import PACKET_SIZE, PacketError, decode, parse_gateway_line
 from .simulator import SCENARIOS, SquadSimulator
 
@@ -34,6 +36,7 @@ class Hub:
         self.t0 = time.monotonic()
         self._brief_pending = False
         self.serial_queue: asyncio.Queue = asyncio.Queue()
+        self.gps = GpsStore()
 
     def now(self) -> float:
         return self.sim.t if self.sim else time.monotonic() - self.t0
@@ -53,6 +56,7 @@ class Hub:
         snap["source"] = config.SOURCE
         snap["emission"] = self.sim.emission_stats() if self.sim else None
         snap["briefings"] = self.briefings[:10]
+        snap["gps"] = self.gps.snapshot()
         snap["llm"] = {"enabled": config.LLM_ENABLED, "reachable": self.briefer.llm_ok,
                        "model": config.LLM_MODEL, "base_url": config.LLM_BASE_URL}
         return snap
@@ -123,9 +127,13 @@ async def lifespan(app: FastAPI):
     if not hub.sim:
         tasks.append(asyncio.create_task(hub.tick_loop()))
     log.info("C2 backend up (source=%s, llm=%s %s)", config.SOURCE, config.LLM_BASE_URL, config.LLM_MODEL)
-    yield
-    for t in tasks:
-        t.cancel()
+    try:
+        yield
+    finally:
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        hub.gps.close()
 
 
 app = FastAPI(title="Squad Tactical C2", version="0.1.0", lifespan=lifespan)
@@ -179,6 +187,59 @@ async def briefing_now() -> dict:
     hub.briefings.insert(0, b)
     await hub.broadcast({"type": "briefing", "briefing": b})
     return b
+
+
+# ---------------------------------------------------------------- phone GPS / camera AR
+_static = Path(__file__).resolve().parent / "static"
+app.mount("/ar-assets", StaticFiles(directory=_static), name="ar-assets")
+
+
+@app.get("/gps", include_in_schema=False)
+def gps_page() -> FileResponse:
+    """Phone GPS transmitter, opened over HTTPS."""
+    return FileResponse(_static / "gps.html", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/ar", include_in_schema=False)
+def ar_page() -> FileResponse:
+    return FileResponse(_static / "ar.html", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/gps")
+async def post_gps(fix: GpsFix, request: Request) -> dict:
+    try:
+        row = hub.gps.ingest(fix, request.client.host if request.client else None)
+    except GpsCapacityError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if row["accepted"]:
+        await hub.broadcast({"type": "gps", "fix": row})
+    return {"ok": True, "accepted": row["accepted"],
+            "reason": row.get("reason"), "heading_deg": row["heading_deg"],
+            "heading_source": row["heading_source"], "id_conflict": row["id_conflict"]}
+
+
+@app.get("/api/gps")
+def get_gps() -> dict:
+    return hub.gps.snapshot()
+
+
+@app.get("/gps/pc", include_in_schema=False)
+def gps_pc_page() -> FileResponse:
+    return FileResponse(_static / "gps_pc.html", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/gps/logs")
+def gps_logs() -> dict:
+    return {"files": hub.gps.log_files()}
+
+
+@app.get("/api/gps/csv")
+def gps_csv(name: str | None = None) -> FileResponse:
+    path = hub.gps.csv_path if name is None else hub.gps.log_path(name)
+    if path is None:
+        raise HTTPException(404, "no such log")
+    return FileResponse(path, media_type="text/csv", filename=path.name,
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.websocket("/ws")

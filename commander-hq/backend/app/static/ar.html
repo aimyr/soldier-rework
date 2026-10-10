@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#090e18">
+  <title>Soldier Rework · Phone AR</title>
+  <link rel="stylesheet" href="/ar-assets/ar.css">
+</head>
+<body>
+  <header>
+    <a class="brand" href="/ar">SOLDIER REWORK <span>PHONE AR</span></a>
+    <a class="monitor-link" href="/gps/pc">GPS monitor ↗</a>
+  </header>
+  <main>
+    <section id="view" aria-label="Camera with participant markers">
+      <video id="camera" autoplay muted playsinline></video>
+      <canvas id="overlay" aria-label="Blue wireframe cubes at participant locations"></canvas>
+      <div class="top-hud"><span id="mode" class="badge">STANDBY</span><span id="count" class="badge">0 in view</span></div>
+      <div id="welcome">
+        <div class="cube-icon" aria-hidden="true">◇</div>
+        <h1>See your group<br>through the camera.</h1>
+        <p>Open this page on each phone. Blue cubes show the other phones’ approximate GPS positions.</p>
+      </div>
+      <div id="crosshair" aria-hidden="true">+</div>
+      <div class="bottom-hud"><span id="heading">Heading —</span><span id="gps">GPS —</span><span id="height">Height —</span></div>
+    </section>
+    <div class="controls">
+      <label class="identity">Phone ID<input id="device-id" maxlength="32" pattern="[A-Za-z0-9_-]+" autocomplete="off" aria-label="Phone ID"></label>
+      <button id="start" class="primary">Start camera + GPS</button>
+      <button id="demo">Try demo</button>
+    </div>
+    <p id="status" role="status" aria-live="polite">Join the same Wi-Fi and use HTTPS on every phone. Camera, location and motion access are requested when you start.</p>
+    <div id="nearby" aria-label="Nearby participants"></div>
+    <details id="settings">
+      <summary>Camera &amp; height settings <span>Adjust alignment</span></summary>
+      <div class="settings-grid">
+        <label>Horizontal field of view <output id="fov-value">65°</output><input id="fov" type="range" min="25" max="100" value="65"></label>
+        <label>Compass correction <output id="yaw-value">0°</output><input id="yaw" type="range" min="-180" max="180" value="0"></label>
+        <label class="check"><input id="use-height" type="checkbox" checked> Use GPS height when both readings are accurate</label>
+        <label>My altitude correction, metres<input id="altitude-offset" type="number" min="-100" max="100" step="0.5" value="0"></label>
+        <label>Maximum vertical error, metres<input id="max-alt-error" type="number" min="1" max="50" step="1" value="15"></label>
+        <label>Cube edge, metres<input id="cube-size" type="number" min="0.5" max="5" step="0.1" value="1.8"></label>
+        <div class="calibration">
+          <label>Known direction of the rear camera<input id="known-heading" type="number" min="0" max="359" value="0" aria-label="Known camera heading in degrees from north"></label>
+          <button id="calibrate">Set this direction</button>
+          <p>0° = north, 90° = east. Aim at a known direction, then set it if your browser has no absolute compass. Recalibrate after restarting.</p>
+        </div>
+        <div id="demo-settings" hidden>
+          <label>Demo camera direction <output id="demo-yaw-value">0°</output><input id="demo-yaw" type="range" min="-180" max="180" value="0"></label>
+          <label>Demo camera tilt <output id="demo-pitch-value">0°</output><input id="demo-pitch" type="range" min="-60" max="60" value="0"></label>
+        </div>
+      </div>
+    </details>
+    <p class="footnote">GPS AR is approximate. Cubes get smaller with distance. They can appear through walls; the camera does not detect people or surfaces. Missing or noisy height uses a flat position.</p>
+    <a class="gps-link" href="/gps">Use GPS sharing without the camera ↗</a>
+  </main>
+  <script type="module" src="/ar-assets/ar-app.mjs"></script>
+</body>
+</html>

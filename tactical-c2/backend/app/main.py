@@ -7,7 +7,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -197,8 +197,8 @@ def gps_page() -> FileResponse:
 
 
 @app.post("/api/gps")
-async def post_gps(fix: GpsFix) -> dict:
-    row = hub.gps.ingest(fix)
+async def post_gps(fix: GpsFix, request: Request) -> dict:
+    row = hub.gps.ingest(fix, request.client.host if request.client else None)
     await hub.broadcast({"type": "gps", "fix": row})
     return {"ok": True, "heading_deg": row["heading_deg"], "heading_source": row["heading_source"]}
 

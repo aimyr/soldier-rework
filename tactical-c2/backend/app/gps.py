@@ -34,6 +34,8 @@ CSV_COLUMNS = {
     "altitude_accuracy_m": "alt_accuracy_m",
     "phone_fix_unix_ms": "fix_unix_ms",
     "laptop_recv_unix_ms": "recv_unix_ms",
+    "device_name": "device_name",            # phone model / OS reported by the browser
+    "client_ip": "client_ip",                # phone address on the hotspot
 }
 
 
@@ -45,6 +47,7 @@ def _deg_or_none(v: float | None) -> float | None:
 
 class GpsFix(BaseModel):
     device_id: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9_\-]+$")
+    device_name: str | None = Field(default=None, max_length=64)  # e.g. "SM-S911N · Android 14"
     fix_unix_ms: int                        # GeolocationPosition.timestamp (phone clock)
     lat: float = Field(ge=-90, le=90)       # WGS84 degrees
     lon: float = Field(ge=-180, le=180)
@@ -55,6 +58,12 @@ class GpsFix(BaseModel):
     speed_mps: float | None = Field(default=None, ge=0)
     alt_m: float | None = None
     alt_accuracy_m: float | None = Field(default=None, ge=0)
+
+    @field_validator("device_name")
+    @classmethod
+    def _clean_name(cls, v: str | None) -> str | None:
+        v = "".join(ch for ch in (v or "") if ch.isprintable()).strip()
+        return v or None
 
     @field_validator("heading_gps_deg", "heading_compass_deg")
     @classmethod
@@ -77,22 +86,29 @@ class GpsStore:
     def __init__(self, log_dir: Path = LOG_DIR, track_len: int = 300) -> None:
         self.latest: dict[str, dict] = {}
         self.tracks: dict[str, deque] = {}
+        self._ips: dict[str, dict[str, float]] = {}   # device_id -> {client_ip: last seen}
         self.track_len = track_len
         log_dir.mkdir(parents=True, exist_ok=True)
         self.csv_path = log_dir / f"gps_{time.strftime('%Y%m%d_%H%M%S')}.csv"
-        self._f = self.csv_path.open("w", newline="", encoding="utf-8")
+        self._f = self.csv_path.open("w", newline="", encoding="utf-8-sig")  # BOM: Excel opens UTF-8 correctly
         self._w = csv.writer(self._f)
         self._w.writerow(CSV_COLUMNS)
         self._f.flush()
 
-    def ingest(self, fix: GpsFix) -> dict:
+    def ingest(self, fix: GpsFix, client_ip: str | None = None) -> dict:
         heading, src = fix.heading()
         now = time.time()
         row = fix.model_dump() | {
             "recv_unix_ms": int(now * 1000), "heading_deg": heading, "heading_source": src,
+            "client_ip": client_ip,
             "time_local": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)) + f".{int(now * 1000) % 1000:03d}"}
         self._w.writerow(["" if row.get(k) is None else row[k] for k in CSV_COLUMNS.values()])
         self._f.flush()
+        seen = self._ips.setdefault(fix.device_id, {})
+        seen[client_ip or "?"] = now
+        for ip in [ip for ip, t in seen.items() if now - t > 15]:
+            del seen[ip]
+        row["id_conflict"] = len(seen) > 1   # same ID sent from two phones within 15 s
         self.latest[fix.device_id] = row
         tr = self.tracks.setdefault(fix.device_id, deque(maxlen=self.track_len))
         tr.append((fix.lat, fix.lon))
@@ -111,7 +127,7 @@ class GpsStore:
         out = []
         for p in sorted(self.csv_path.parent.glob("gps_*.csv"), reverse=True):
             if LOG_NAME_RE.match(p.name):
-                with p.open(encoding="utf-8") as f:
+                with p.open(encoding="utf-8-sig") as f:
                     rows = max(0, sum(1 for _ in f) - 1)
                 out.append({"name": p.name, "bytes": p.stat().st_size, "rows": rows,
                             "current": p == self.csv_path})

@@ -17,7 +17,8 @@
   main { padding:12px 16px 28px; }
   .row { display:flex; gap:8px; margin-bottom:10px; }
   input, button { font:inherit; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--fg); padding:10px 12px; }
-  input { width:90px; }
+  input { width:150px; min-width:0; }
+  .devline { color:var(--dim); font-size:12px; margin:-2px 0 10px; }
   button { flex:1; cursor:pointer; }
   button.primary { background:#1f5c3a; border-color:#2f8a57; font-weight:600; }
   button.stop { background:#5c2420; border-color:#8a362f; }
@@ -43,10 +44,11 @@
 <div id="map"></div>
 <main>
   <div class="row">
-    <input id="dev" value="P1" maxlength="32" aria-label="Device ID">
+    <input id="dev" value="" placeholder="detecting…" maxlength="32" aria-label="Device ID" title="Device ID (auto: model + unique code, editable)">
     <button id="startBtn" class="primary">Start</button>
     <button id="csvBtn">Save CSV</button>
   </div>
+  <div class="devline" id="devName">Device: detecting…</div>
   <div class="grid">
     <div class="cell"><div class="k">Latitude (deg, +N)</div><div class="v" id="lat">—</div></div>
     <div class="cell"><div class="k">Longitude (deg, +E)</div><div class="v" id="lon">—</div></div>
@@ -67,8 +69,57 @@ const SEND_INTERVAL_MS = 1000;      // 1 Hz, same as firmware GpsPacket
 const QUEUE_MAX = 900;              // ~15 min of fixes kept while the laptop is unreachable
 const MOVING_MPS = 1.0;             // above this, GNSS course is trusted over the compass
 
-const st = { watchId:null, compass:null, compassAcc:null, last:null, lastSent:0,
+const st = { deviceName:"", watchId:null, compass:null, compassAcc:null, last:null, lastSent:0,
              queue:[], log:[], sent:0, failed:0, wakeLock:null, follow:true };
+
+// ---------------------------------------------------------------- device identity
+// Browsers do not expose the phone's own name, so each phone gets "<model>-<4 hex>"
+// (e.g. SM-S911N-3fa2, iPhone-7c1e). The code is random and kept in localStorage,
+// so two phones on the same hotspot/link never collide and a reload keeps the same ID.
+const ID_KEY = "squad_gps_device_id";
+function store(key, val) {
+  try { if (val === undefined) return localStorage.getItem(key); localStorage.setItem(key, val); } catch (_) {}
+  return null;
+}
+function randHex(bytes) {
+  const a = new Uint8Array(bytes); crypto.getRandomValues(a);
+  return Array.from(a, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+const cleanId = (v) => v.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
+async function detectDevice() {
+  const ua = navigator.userAgent; let model = "", os = "", m;
+  try {
+    if (navigator.userAgentData && navigator.userAgentData.getHighEntropyValues) {   // Chrome / Edge / Samsung on Android
+      const h = await navigator.userAgentData.getHighEntropyValues(["model", "platform", "platformVersion"]);
+      model = (h.model || "").trim();
+      if (h.platform) os = h.platform + (h.platformVersion ? " " + h.platformVersion.split(/[._]/)[0] : "");
+    }
+  } catch (_) {}
+  if (!model && (m = ua.match(/Android [\d.]+; ([^;)]+)/)) && m[1].trim() !== "K") model = m[1].replace(/ Build\/.*/, "").trim();
+  if (!model && /iPhone/.test(ua)) model = "iPhone";
+  if (!model && /iPad/.test(ua)) model = "iPad";
+  if (!os) {
+    if ((m = ua.match(/OS (\d+)[_\d]* like Mac OS X/))) os = "iOS " + m[1];
+    else if ((m = ua.match(/Android (\d+)/))) os = "Android " + m[1];
+  }
+  if (!model) model = /Android/.test(ua) ? "Android" : /Windows/.test(ua) ? "Windows" : /Macintosh/.test(ua) ? "Mac" : "Phone";
+  return { model, os };
+}
+const deviceReady = (async () => {
+  const d = await detectDevice();
+  st.deviceName = [d.model, d.os].filter(Boolean).join(" · ");
+  let id = store(ID_KEY);
+  if (!id || !/^[A-Za-z0-9_-]{1,32}$/.test(id)) {
+    id = `${cleanId(d.model).slice(0, 26) || "Phone"}-${randHex(2)}`;
+    store(ID_KEY, id);
+  }
+  $("dev").value = id;
+  $("devName").textContent = `Device: ${st.deviceName}`;
+})();
+$("dev").addEventListener("change", () => {
+  const v = cleanId($("dev").value);
+  if (v) { $("dev").value = v; store(ID_KEY, v); }
+});
 
 // ---------------------------------------------------------------- map (OSM)
 let map = null, marker = null, accCircle = null, trail = null;
@@ -130,7 +181,8 @@ function stopCompass() {
 function onPosition(pos) {
   const c = pos.coords;
   const f = {
-    device_id: $("dev").value.trim() || "P1",
+    device_id: cleanId($("dev").value) || "Phone-" + randHex(2),
+    device_name: st.deviceName || null,
     fix_unix_ms: Math.round(pos.timestamp),
     lat: c.latitude, lon: c.longitude, accuracy_m: c.accuracy,
     heading_gps_deg: Number.isFinite(c.heading) ? c.heading : null,
@@ -206,6 +258,7 @@ function pill(cls, t) { const p = $("netPill"); p.className = "pill " + cls; p.t
 
 async function start() {
   note("");
+  await deviceReady;
   if (!window.isSecureContext) {
     note("Not HTTPS, so the browser blocks location access.\nOpen https://<laptop-ip>:8443/gps (see README).");
     pill("bad", "NOT HTTPS");
@@ -238,8 +291,8 @@ $("csvBtn").addEventListener("click", () => {
                 ["altitude_accuracy_m","alt_accuracy_m"],["phone_fix_unix_ms","fix_unix_ms"]];
   const lines = [cols.map((c) => c[0]).join(",")].concat(st.log.map((f) => cols.map((c) => f[c[1]] ?? "").join(",")));
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([lines.join("\n")], { type:"text/csv" }));
-  a.download = `gps_${$("dev").value || "P1"}_${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
+  a.href = URL.createObjectURL(new Blob(["\ufeff" + lines.join("\n")], { type:"text/csv" }));
+  a.download = `gps_${cleanId($("dev").value) || "phone"}_${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
   a.click();
 });
 document.addEventListener("visibilitychange", async () => {   // wake lock is dropped when the tab is hidden

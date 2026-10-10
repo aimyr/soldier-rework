@@ -98,6 +98,11 @@ On the laptop, `https://localhost:8443/gps/pc` (opened automatically by
 button, plus links to every earlier log. CSV columns start with
 `time_local, device_id, latitude_deg, longitude_deg, accuracy_m, heading_deg`.
 
+Each phone identifies itself automatically as `<model>-<4 hex>` (e.g. `SM-S911N-3fa2`,
+`iPhone-7c1e`); the code is random and kept on the phone, so several phones on the
+same hotspot and the same link are tracked separately. The ID can be edited on the
+phone; the monitor warns if two phones send the same ID.
+
 Every fix is appended to `backend/data/gps_<start time>.csv`; the latest fix per
 device is in `GET /api/gps`, in `/api/state` under `gps`, and pushed on the
 WebSocket as `{"type": "gps", "fix": {...}}`. If the laptop is unreachable the

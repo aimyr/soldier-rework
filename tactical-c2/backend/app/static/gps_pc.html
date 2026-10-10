@@ -23,6 +23,9 @@
   .dev-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
   .dev-id { font-weight:700; font-size:15px; }
   .age { font-size:12px; color:var(--dim); }
+  .conflict { color:var(--bad); font-size:12px; font-weight:600; margin:-4px 0 6px; }
+  .dev-sub { font-size:12px; color:var(--dim); margin:-4px 0 8px; }
+  .swatch { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:7px; vertical-align:1px; }
   .age.stale { color:var(--warn); }
   table.kv { width:100%; border-collapse:collapse; }
   .kv th { text-align:left; font-weight:500; color:var(--dim); padding:3px 0; width:52%; }
@@ -51,7 +54,8 @@
   <aside>
     <h2>Live readings</h2>
     <div id="devices"><p class="empty">Waiting for a phone… open <b>https://&lt;laptop-ip&gt;:8443/gps</b> on the phone and press Start.</p></div>
-    <p class="legend">Latitude / Longitude: WGS84 decimal degrees (+N, +E). Accuracy: horizontal radius in metres.
+    <p class="legend">Each phone is listed by its own ID (phone model + unique code, shown on the phone and editable there).
+      Latitude / Longitude: WGS84 decimal degrees (+N, +E). Accuracy: horizontal radius in metres.
       Heading (azimuth): degrees clockwise from north (0 = N, 90 = E).</p>
     <h2>CSV logs (backend\data)</h2>
     <table class="logs"><tbody id="logs"><tr><td class="empty">—</td></tr></tbody></table>
@@ -67,6 +71,8 @@ const num = (v, d) => (v == null ? "—" : Number(v).toFixed(d));
 const COLORS = ["#62b6ff", "#5fd38d", "#f0b54a", "#ef6a5a", "#c58bff", "#4fd1c5"];
 
 let map = null; const layers = {}; let fitted = false;
+const colorIdx = {};
+const colorOf = (id) => COLORS[(colorIdx[id] ??= Object.keys(colorIdx).length) % COLORS.length];
 if (window.L) {
   map = L.map("map").setView([37.5665, 126.9780], 15);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom:19,
@@ -75,14 +81,14 @@ if (window.L) {
 
 function drawMap(devs) {
   if (!map) return;
-  devs.forEach((d, i) => {
-    const color = COLORS[i % COLORS.length], ll = [d.lat, d.lon];
+  devs.forEach((d) => {
+    const color = colorOf(d.device_id), ll = [d.lat, d.lon];
     let g = layers[d.device_id];
     if (!g) {
       const icon = L.divIcon({ className:"", iconSize:[28,28], iconAnchor:[14,14],
         html:`<svg class="arrow" viewBox="0 0 30 30"><circle cx="15" cy="15" r="6" fill="${color}" stroke="#fff" stroke-width="2"/><path d="M15 1 L20 11 L10 11 Z" fill="${color}" stroke="#fff"/></svg>` });
       g = layers[d.device_id] = {
-        marker: L.marker(ll, { icon }).bindTooltip(esc(d.device_id), { permanent:true, direction:"right", offset:[10,0] }).addTo(map),
+        marker: L.marker(ll, { icon }).bindTooltip(esc(d.device_id) + (d.device_name ? "<br><small>" + esc(d.device_name) + "</small>" : ""), { permanent:true, direction:"right", offset:[10,0] }).addTo(map),
         circle: L.circle(ll, { radius:d.accuracy_m, color, weight:1, fillOpacity:.12 }).addTo(map),
         trail: L.polyline([], { color, weight:3, opacity:.8 }).addTo(map) };
     }
@@ -101,8 +107,10 @@ function drawDevices(devs) {
   if (!devs.length) return;
   $("devices").innerHTML = devs.map((d) => `
     <div class="dev">
-      <div class="dev-head"><span class="dev-id">${esc(d.device_id)}</span>
-        <span class="age${d.age_s > 5 ? " stale" : ""}">updated ${num(d.age_s, 1)} s ago · ${esc(d.time_local)}</span></div>
+      <div class="dev-head"><span class="dev-id"><span class="swatch" style="background:${colorOf(d.device_id)}"></span>${esc(d.device_id)}</span>
+        <span class="age${d.age_s > 5 ? " stale" : ""}">updated ${num(d.age_s, 1)} s ago</span></div>
+      ${d.id_conflict ? '<div class="conflict">Same ID is being sent from two phones — change the ID on one phone.</div>' : ""}
+      <div class="dev-sub">${esc(d.device_name || "unknown device")} · ${esc(d.client_ip || "?")} · ${esc(d.time_local)}</div>
       <table class="kv">
         ${row("Latitude", num(d.lat, 7), "°", true)}
         ${row("Longitude", num(d.lon, 7), "°", true)}

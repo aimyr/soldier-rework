@@ -20,7 +20,7 @@ def test_store_writes_csv(tmp_path):
     s = GpsStore(log_dir=tmp_path)
     s.ingest(GpsFix(**FIX))
     s.close()
-    with s.csv_path.open(encoding="utf-8") as f:
+    with s.csv_path.open(encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
     assert list(rows[0])[:6] == ["time_local", "device_id", "latitude_deg", "longitude_deg",
                                  "accuracy_m", "heading_deg"]
@@ -42,7 +42,22 @@ def test_api_roundtrip():
         assert c.get("/gps/pc").status_code == 200
         csv_r = c.get("/api/gps/csv")
         assert csv_r.status_code == 200 and "attachment" in csv_r.headers["content-disposition"]
-        assert csv_r.text.splitlines()[0].startswith("time_local,device_id,latitude_deg,longitude_deg,accuracy_m,heading_deg")
+        assert csv_r.text.lstrip("\ufeff").splitlines()[0].startswith("time_local,device_id,latitude_deg,longitude_deg,accuracy_m,heading_deg")
         name = c.get("/api/gps/logs").json()["files"][0]["name"]
         assert c.get("/api/gps/csv", params={"name": name}).status_code == 200
         assert c.get("/api/gps/csv", params={"name": "../app/main.py"}).status_code == 404
+
+
+def test_device_identity_and_conflict(tmp_path):
+    s = GpsStore(log_dir=tmp_path)
+    a = s.ingest(GpsFix(**FIX | {"device_id": "SM-S911N-3fa2", "device_name": "SM-S911N · Android 14\n"}), "172.20.10.3")
+    b = s.ingest(GpsFix(**FIX | {"device_id": "iPhone-7c1e", "device_name": "iPhone · iOS 18"}), "172.20.10.4")
+    assert a["device_name"] == "SM-S911N · Android 14" and a["client_ip"] == "172.20.10.3"
+    assert not a["id_conflict"] and not b["id_conflict"]
+    assert [d["device_id"] for d in s.snapshot()["devices"]] == ["SM-S911N-3fa2", "iPhone-7c1e"]
+    c = s.ingest(GpsFix(**FIX | {"device_id": "iPhone-7c1e"}), "172.20.10.5")
+    assert c["id_conflict"]
+    s.close()
+    with s.csv_path.open(encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["device_name"] == "SM-S911N · Android 14" and rows[1]["client_ip"] == "172.20.10.4"

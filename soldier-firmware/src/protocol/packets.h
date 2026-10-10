@@ -1,8 +1,8 @@
 #pragma once
 #include <stdint.h>
 
-// BLE packet definitions. All fields are little-endian, with no padding.
-// Keep these definitions synchronized with the PC decoder in tools/protocol.py.
+// Internal sensor snapshots passed between drivers, node logic and serial
+// telemetry. Not transmitted; the radio packet is node/packet.h.
 
 // IMU packet (16 bytes)
 //  accel: ±2 g -> 16384 LSB/g, gyro: ±2000 dps -> 16.4 LSB/(deg/s)
@@ -41,15 +41,3 @@ struct __attribute__((packed)) GpsPacket {
   uint8_t  sats;       // Number of satellites used
 };
 static_assert(sizeof(GpsPacket) == 20, "GpsPacket size");
-
-// Status v3, 16 bytes. Flags: bit0 IMU online, bit1 analog task ready,
-// bit2 temperature valid, bit3 BPM available, bit4 GPS fix, bit5 GPS enabled,
-// bit6 DMP initializing/settling.
-struct __attribute__((packed)) StatusPacket {
-  uint32_t t_ms;
-  uint16_t version;
-  uint16_t flags;
-  uint32_t tx_dropped;
-  uint32_t sample_gaps;
-};
-static_assert(sizeof(StatusPacket) == 16, "StatusPacket size");

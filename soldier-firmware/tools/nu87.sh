@@ -16,12 +16,19 @@ case "${1:-build}" in
     exec "$cli" core install realtek:AmebaD@3.1.9 --additional-urls "$index"
     ;;
   build|upload)
+    if [ -z "${SOLDIER_ID:-}" ]; then
+      echo 'Set the board ID (1..255): SOLDIER_ID=3 sh tools/nu87.sh build' >&2; exit 2
+    fi
+    defines="-DSOLDIER_ID=$SOLDIER_ID"
+    if [ -n "${AO_ORIGIN_LAT_E7:-}${AO_ORIGIN_LON_E7:-}" ]; then
+      defines="$defines -DAO_ORIGIN_LAT_E7=${AO_ORIGIN_LAT_E7:-} -DAO_ORIGIN_LON_E7=${AO_ORIGIN_LON_E7:-}"
+    fi
     mkdir -p .build/nu87_hud .build/output
     rm -rf .build/nu87_hud/src
     cp -R src .build/nu87_hud/src
     printf '#include <BLEDevice.h>\n' > .build/nu87_hud/nu87_hud.ino
     "$cli" compile --fqbn "$fqbn" --build-path "$root/.build/output" \
-      --build-property "compiler.c.extra_flags=-I$root/.build/output/sketch/src" .build/nu87_hud
+      --build-property "compiler.c.extra_flags=-I$root/.build/output/sketch/src $defines" .build/nu87_hud
     if [ "${1:-build}" = upload ]; then
       if [ -z "${2:-}" ]; then echo 'Usage: tools/nu87.sh upload /dev/ttyUSB0' >&2; exit 2; fi
       "$cli" upload --fqbn "$fqbn" --port "$2" --input-file .build/output/km0_km4_image2.bin .build/nu87_hud
@@ -30,5 +37,5 @@ case "${1:-build}" in
   monitor)
     exec "$cli" monitor --port "${2:-/dev/ttyUSB0}" --config baudrate=9600
     ;;
-  *) echo 'Usage: tools/nu87.sh {setup|build|upload PORT|monitor PORT}' >&2; exit 2 ;;
+  *) echo 'Usage: SOLDIER_ID=N tools/nu87.sh {setup|build|upload PORT|monitor PORT}' >&2; exit 2 ;;
 esac

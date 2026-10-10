@@ -13,8 +13,8 @@ void StatusLed::begin() {
 }
 void StatusLed::set(bool on) {
   const bool fault = state_ == State::Fatal || state_ == State::SensorFault;
-  const bool green = state_ == State::Connected || state_ == State::Boot;
-  const bool blue = state_ == State::Ready || state_ == State::Boot;
+  const bool green = state_ == State::Reporting || state_ == State::Boot;
+  const bool blue = state_ == State::Baseline || state_ == State::Boot;
   digitalWrite(STATUS_LED_RED, on && fault);
   digitalWrite(STATUS_LED_GREEN, on && green);
   digitalWrite(STATUS_LED_BLUE, on && blue);
@@ -25,7 +25,7 @@ void StatusLed::update(State state, uint32_t nowMs) {
   const uint32_t elapsed = nowMs - sinceMs_;
   if (state == State::Boot) { set(true); return; }
   if (state == State::Fatal) { set(elapsed % 250 < 80); return; }
-  const uint8_t pulses = state == State::SensorFault ? 3 : state == State::Connected ? 2 : 1;
+  const uint8_t pulses = state == State::SensorFault ? 3 : state == State::Reporting ? 2 : 1;
   const uint32_t phase = elapsed % 2000;
   set(phase < uint32_t(pulses) * 200 && phase % 200 < 60);
 }

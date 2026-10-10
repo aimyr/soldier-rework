@@ -20,6 +20,8 @@ Nodes transmit only on alerts and a randomized check-in, not a continuous stream
 
 | Part | State |
 |---|---|
-| soldier-firmware | Sensors working. Radio still streams over a BLE connection; must be converted to event packets per `docs/DATA_SPEC.md`. |
+| soldier-firmware | Event reporting per `docs/DATA_SPEC.md`: alert rules, check-ins, GPS/PDR position, advertising bursts. Unit- and parity-tested against the backend; not yet compiled for or run on hardware. |
 | commander-firmware | Written and unit-tested. Not yet compiled for or run on hardware. |
 | commander-hq | Working with its built-in squad simulator. |
+
+Open work: [TODO.md](TODO.md).

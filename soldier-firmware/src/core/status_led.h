@@ -1,11 +1,11 @@
 #pragma once
 #include <stdint.h>
 
-// Onboard RGB: cyan boot, blue ready, green connected, red faults.
+// Onboard RGB: cyan boot, blue collecting baseline, green reporting, red faults.
 // Driven by loop(), so a stopped loop cannot keep emitting a healthy heartbeat.
 class StatusLed {
 public:
-  enum class State : uint8_t { Boot, Ready, Connected, SensorFault, Fatal };
+  enum class State : uint8_t { Boot, Baseline, Reporting, SensorFault, Fatal };
   void begin();
   void update(State state, uint32_t nowMs);
 private:

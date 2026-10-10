@@ -1,5 +1,7 @@
 # NU-87 Power and Stability Validation Record
 
+The records below predate the switch from BLE streaming (protocol v3) to event-only advertising. Radio findings refer to the streaming firmware.
+
 Target: NUCODE NU-87 Tiny DK (RTL8720DF), Realtek AmebaD 3.1.9 core, board AMB26. MPU6050 with MotionApps DMP 6.12 at up to 50Hz over BLE; TMP36 and Pulse Sensor on calibrated 3.3V ADC; GPS NMEA at 9600 baud on Serial1. Earlier NU40 upload records and LSM6DS power settings do not apply to this board.
 
 ## Confirmed
@@ -36,8 +38,8 @@ No current has been measured, so no power figure can be claimed. Do not reuse NU
 1. **IMU:** at rest, acceleration magnitude ≈ 1g and gyro ≈ 0. Move each axis to check signs and orientation.
 2. **Analog sensors:** compare TMP36 with a reference thermometer. Check Pulse Sensor waveform and BPM during motion and poor contact; a plausible value does not prove a sensor is attached.
 3. **GPS:** confirm module model, supply and logic voltage, baud rate and an outdoor fix. Test loss of fix and stale-data handling.
-4. **BLE:** record packet counts and timestamp gaps on a real PC adapter, including disconnect/reconnect and range. The development machine has no working BlueZ D-Bus service.
+4. **Radio:** with `commander-firmware`, count bursts sent (`TX` lines) against packets forwarded and `duplicates` (`GW` lines) at increasing range. Confirm the 20 ms advertising interval is accepted.
 5. **Endurance:** run all sensors for an extended period. Check stack headroom and `sample_gaps`, and unplug/replug I2C with pull-ups fitted.
-6. **Current:** measure average and peak supply current for ≥ 60 s under fixed conditions, both connected and advertising, with debug on and off. Make sure no supply path bypasses the meter.
+6. **Current:** measure average and peak supply current for ≥ 60 s under fixed conditions, idle and during bursts, with debug on and off. Make sure no supply path bypasses the meter.
 
 Sources: [NUCODE schematic and start guide](https://nucode.gitbook.io/nuseries/downloads/nu-87-tinydk), [Realtek Arduino core](https://github.com/Ameba-AIoT/ameba-arduino-d).

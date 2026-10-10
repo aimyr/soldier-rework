@@ -31,12 +31,26 @@ static_assert(ADC_BITS >= 10 && ADC_BITS <= 12, "Supported ADC resolution: 10..1
 // ---- Sampling periods (us) ----
 constexpr uint32_t PULSE_PERIOD_US = 2000;     // 500 Hz (beat detection)
 constexpr uint32_t IMU_PERIOD_US   = 20000;    // 50 Hz
-constexpr uint32_t VITALS_PERIOD_US = 200000;  // 5 Hz (temperature and pulse telemetry)
-constexpr uint32_t GPS_PERIOD_US    = 1000000; // 1 Hz (latest GPS telemetry)
-
-// ---- BLE ----
-constexpr char BLE_DEVICE_NAME[] = "NUCODE-HUD";
+constexpr uint32_t VITALS_PERIOD_US = 200000;  // 5 Hz (temperature and pulse snapshots)
+constexpr uint32_t NODE_PERIOD_US   = 1000000; // 1 Hz (alert rules, position, check-in)
 constexpr uint32_t MAIN_IDLE_MS = 5;
+
+// ---- Node identity (docs/DATA_SPEC.md) ----
+// Set per board at build time: SOLDIER_ID=3 sh tools/nu87.sh build
+#ifndef SOLDIER_ID
+#error "Define SOLDIER_ID (1..255) for this board, e.g. SOLDIER_ID=3 sh tools/nu87.sh build"
+#endif
+static_assert(SOLDIER_ID >= 1 && SOLDIER_ID <= 255, "SOLDIER_ID must be 1..255");
+// Optional shared area-of-operations origin, degrees x 1e7. When set, x/y are
+// metres east/north of it once GPS has a fix; otherwise of the power-on position.
+#if defined(AO_ORIGIN_LAT_E7) != defined(AO_ORIGIN_LON_E7)
+#error "Define both AO_ORIGIN_LAT_E7 and AO_ORIGIN_LON_E7, or neither"
+#endif
+
+// ---- Radio: BLE advertising bursts ----
+constexpr uint16_t ADV_INTERVAL_MIN_MS = 20;  // demo defaults; verify packet counts on hardware
+constexpr uint16_t ADV_INTERVAL_MAX_MS = 30;
+constexpr uint32_t ADV_BURST_MS = 300;
 // UART NMEA GPS enabled; adjust baud rate for the actual module.
 #ifndef CFG_GPS
 #define CFG_GPS 1

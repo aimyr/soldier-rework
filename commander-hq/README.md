@@ -72,7 +72,7 @@ Horizontal field of view is estimated from a 65° long-axis lens angle and the a
 
 Browser GPS altitude is [WGS84 ellipsoid height](https://www.w3.org/TR/geolocation/#altitude-attribute). The existing firmware's NMEA altitude is mean sea level (`msl`). The backend carries `alt_reference`; these references are never mixed. Vertical displacement is used only when both heights and vertical uncertainties are present, the references match (`wgs84` or `msl`) and each uncertainty is below the setting's limit (15 m default). Otherwise cubes use a flat height. **My altitude correction** adds to the viewing phone's altitude: a positive correction moves the other markers down, and works as a manual vertical adjustment even with flat fallback. GPS altitude cannot reliably identify floors; better vertical placement needs calibrated barometer/known heights or native AR tracking.
 
-Position and pose are uploaded and other devices polled once per second. The app also requests a fresh GPS fix every 5 seconds to keep stationary phones updated. GPS fixes older than 10 seconds are hidden; transport inactivity becomes offline after 30 seconds. The viewing phone, duplicate-ID conflicts and invalid fixes are excluded. The viewer draws targets from 2 m to 2 km; very close GPS positions are too uncertain for a useful cube. Cubes outside the camera view are not drawn. No wall occlusion or camera-based person detection is performed.
+Position and pose are uploaded and other devices polled once per second. Both `/ar` and the camera-free `/gps` page request a fresh GPS fix every 5 seconds to keep stationary phones updated. GPS fixes older than 10 seconds are hidden; transport inactivity becomes offline after 30 seconds. The viewing phone, duplicate-ID conflicts and invalid fixes are excluded. The viewer draws targets from 2 m to 2 km; very close GPS positions are too uncertain for a useful cube. Cubes outside the camera view are not drawn. No wall occlusion or camera-based person detection is performed.
 
 ### API and verification
 
@@ -84,7 +84,7 @@ cd commander-hq/backend
 node --test tests/ar-math.test.mjs
 ```
 
-Browser smoke tests: start the backend on port 8765, then run `npm ci`, `npx playwright install chromium` and `npm test` in `commander-hq/ar-tests`. They use simulated media/GPS/orientation, not physical sensors. Physical iPhone/Android camera alignment, GPS accuracy and sensor calibration require a two-phone outdoor check. The local prototype shares positions with clients on its server and has no account authentication.
+Browser smoke tests: start the backend on port 8765, then run `npm ci`, `npx playwright install chromium`, `npm test` and `npm run test:gps` in `commander-hq/ar-tests`. They use simulated media/GPS/orientation, not physical sensors. Physical iPhone/Android camera alignment, GPS accuracy and sensor calibration require a two-phone outdoor check. The local prototype shares positions with clients on its server and has no account authentication.
 
 ## Configuration
 

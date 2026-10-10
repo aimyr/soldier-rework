@@ -71,7 +71,8 @@ const QUEUE_MAX = 900;              // ~15 min of fixes kept while the laptop is
 const MOVING_MPS = 1.0;             // above this, GNSS course is trusted over the compass
 
 const st = { deviceName:"", watchId:null, compass:null, compassAcc:null, last:null, lastSent:0,
-             queue:[], log:[], sent:0, failed:0, wakeLock:null, follow:true };
+             queue:[], log:[], sent:0, failed:0, wakeLock:null, follow:true,
+             running:false, starting:false, generation:0, refreshTimer:null, refreshPending:false };
 
 // ---------------------------------------------------------------- device identity
 // Browsers do not expose the phone's own name, so each phone gets "<model>-<4 hex>"
@@ -161,12 +162,16 @@ function onIosOrientation(e) {                    // iOS Safari: webkitCompassHe
   st.compassAcc = Number.isFinite(e.webkitCompassAccuracy) && e.webkitCompassAccuracy >= 0
     ? e.webkitCompassAccuracy : null;
 }
-async function startCompass() {
+async function startCompass(generation) {
   if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
     try {                                          // iOS 13+: must be called from a user gesture
       const r = await DeviceOrientationEvent.requestPermission();
+      if (generation !== st.generation) return;
       if (r !== "granted") { note("Compass permission denied. Heading will use GPS course while moving only."); return; }
-    } catch (err) { note("Compass permission request failed: " + err.message); return; }
+    } catch (err) {
+      if (generation === st.generation) note("Compass permission request failed: " + err.message);
+      return;
+    }
     window.addEventListener("deviceorientation", onIosOrientation, true);
   } else if ("ondeviceorientationabsolute" in window) {
     window.addEventListener("deviceorientationabsolute", onAbsOrientation, true);
@@ -212,6 +217,18 @@ function onPosError(err) {
   note("GPS error: " + why);
   pill(err.code === 1 ? "bad" : "warn", err.code === 1 ? "NO PERMISSION" : "NO FIX");
 }
+function refreshPosition(generation) {
+  if (!st.running || generation !== st.generation || st.refreshPending) return;
+  st.refreshPending = true;
+  const finish = (callback, value) => {
+    if (!st.running || generation !== st.generation) return;
+    st.refreshPending = false;
+    callback(value);
+  };
+  navigator.geolocation.getCurrentPosition(
+    (pos) => finish(onPosition, pos), (err) => finish(onPosError, err),
+    { enableHighAccuracy:true, maximumAge:0, timeout:10000 });
+}
 
 // ------------------------------------------------------------- transmit
 function enqueue(f) {
@@ -222,27 +239,29 @@ function enqueue(f) {
 }
 let flushing = false;
 async function flush() {
-  if (flushing) return;
+  if (flushing || !st.running) return;
+  const generation = st.generation;
   flushing = true;
   try {
-    while (st.queue.length) {
+    while (st.queue.length && st.running && generation === st.generation) {
       const f = st.queue[0];
       const payload = { ...f, fix_age_ms: Math.max(0, Date.now() - f.fix_unix_ms) };
       const r = await fetch("/api/gps", { method:"POST", headers:{ "Content-Type":"application/json" },
                                            body:JSON.stringify(payload), cache:"no-store" });
+      if (!st.running || generation !== st.generation) return;
       if (r.status === 422) { st.queue.shift(); st.failed++; continue; }   // invalid fix: drop, keep going
       if (!r.ok) throw new Error("HTTP " + r.status);
       st.queue.shift(); st.sent++;
     }
-    pill("ok", "LIVE");
+    if (st.running && generation === st.generation) pill("ok", "LIVE");
   } catch (e) {
-    pill("warn", "BUFFERING");
+    if (st.running && generation === st.generation) pill("warn", "BUFFERING");
   } finally {
     flushing = false;
     $("tx").textContent = `sent ${st.sent} · queued ${st.queue.length} · invalid ${st.failed} · saved on phone ${st.log.length}`;
   }
 }
-setInterval(() => { if (st.watchId != null && st.queue.length) flush(); }, 3000);
+setInterval(() => { if (st.running && st.queue.length) flush(); }, 3000);
 
 // ------------------------------------------------------------- UI
 function fmt(v, d) { return v == null ? "—" : v.toFixed(d); }
@@ -262,33 +281,69 @@ function note(t) { $("msg").textContent = t; }
 function pill(cls, t) { const p = $("netPill"); p.className = "pill " + cls; p.textContent = t; }
 
 async function start() {
-  note("");
-  await deviceReady;
-  if (!window.isSecureContext) {
-    note("Not HTTPS, so the browser blocks location access.\nOpen https://<laptop-ip>:8443/gps (see README).");
-    pill("bad", "NOT HTTPS");
-    return;
-  }
-  if (!("geolocation" in navigator)) { note("This browser does not support Geolocation."); return; }
-  await startCompass();
-  st.watchId = navigator.geolocation.watchPosition(onPosition, onPosError,
-    { enableHighAccuracy:true, maximumAge:0, timeout:15000 });
-  try { st.wakeLock = await navigator.wakeLock?.request("screen"); } catch (_) { /* optional */ }
-  st.follow = true;
-  pill("warn", "WAIT FIX");
-  $("startBtn").textContent = "Stop"; $("startBtn").className = "stop";
+  if (st.starting || st.running) return;
+  const generation = ++st.generation;
+  st.starting = true;
+  $("startBtn").disabled = true; $("startBtn").textContent = "Starting…";
   $("dev").disabled = true;
+  note("");
+  try {
+    // Safari requires permission to be requested inside the click's activation,
+    // before any asynchronous identity detection can consume that activation.
+    const compassReady = window.isSecureContext && "geolocation" in navigator
+      ? startCompass(generation) : Promise.resolve();
+    await deviceReady;
+    if (generation !== st.generation) return;
+    if (!window.isSecureContext) {
+      note("Not HTTPS, so the browser blocks location access.\nOpen https://<laptop-ip>:8443/gps (see README).");
+      pill("bad", "NOT HTTPS");
+      return;
+    }
+    if (!("geolocation" in navigator)) { note("This browser does not support Geolocation."); return; }
+    await compassReady;
+    if (generation !== st.generation) return;
+    st.running = true;
+    st.lastSent = 0;
+    st.watchId = navigator.geolocation.watchPosition(
+      (pos) => { if (st.running && generation === st.generation) onPosition(pos); },
+      (err) => { if (st.running && generation === st.generation) onPosError(err); },
+      { enableHighAccuracy:true, maximumAge:0, timeout:15000 });
+    // watchPosition can report only movement on some phones. Acquire a fresh
+    // stationary fix explicitly instead of renewing the timestamp of an old fix.
+    st.refreshTimer = setInterval(() => refreshPosition(generation), 5000);
+    st.follow = true;
+    pill("warn", "WAIT FIX");
+    $("startBtn").textContent = "Stop"; $("startBtn").className = "stop";
+    try {
+      const wakeLock = await navigator.wakeLock?.request("screen");
+      if (st.running && generation === st.generation) st.wakeLock = wakeLock;
+      else wakeLock?.release?.();
+    } catch (_) { /* optional */ }
+  } finally {
+    if (generation === st.generation) {
+      st.starting = false;
+      $("startBtn").disabled = false;
+      if (!st.running) {
+        stopCompass();
+        $("startBtn").textContent = "Start"; $("startBtn").className = "primary";
+        $("dev").disabled = false;
+      }
+    }
+  }
 }
 function stop() {
+  st.running = false; st.starting = false; st.generation++;
+  clearInterval(st.refreshTimer); st.refreshTimer = null; st.refreshPending = false;
   if (st.watchId != null) navigator.geolocation.clearWatch(st.watchId);
   st.watchId = null;
   stopCompass();
   st.wakeLock?.release?.(); st.wakeLock = null;
   pill("", "IDLE");
   $("startBtn").textContent = "Start"; $("startBtn").className = "primary";
+  $("startBtn").disabled = false;
   $("dev").disabled = false;
 }
-$("startBtn").addEventListener("click", () => (st.watchId == null ? start() : stop()));
+$("startBtn").addEventListener("click", () => (st.running ? stop() : start()));
 $("csvBtn").addEventListener("click", () => {
   const cols = [["device_id","device_id"],["latitude_deg","lat"],["longitude_deg","lon"],["accuracy_m","accuracy_m"],
                 ["heading_gps_course_deg","heading_gps_deg"],["heading_compass_deg","heading_compass_deg"],
@@ -302,7 +357,12 @@ $("csvBtn").addEventListener("click", () => {
 });
 document.addEventListener("visibilitychange", async () => {   // wake lock is dropped when the tab is hidden
   if (document.visibilityState === "visible" && st.watchId != null && (!st.wakeLock || st.wakeLock.released)) {
-    try { st.wakeLock = await navigator.wakeLock?.request("screen"); } catch (_) {}
+    const generation = st.generation;
+    try {
+      const wakeLock = await navigator.wakeLock?.request("screen");
+      if (st.running && generation === st.generation) st.wakeLock = wakeLock;
+      else wakeLock?.release?.();
+    } catch (_) {}
   }
 });
 initMap();

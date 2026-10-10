@@ -1,0 +1,3 @@
+NUCODE official Arduino variant, vendored with a USE_TINYUSB redefinition guard for PlatformIO.
+https://github.com/Nucode01/Adafruit_nRF52_Arduino/tree/3c534d24a51cf7244a7c5ae88a3c288f2b13fe77/variants/nu40dk_nrf52840
+License: LGPL-2.1-or-later (see file headers).

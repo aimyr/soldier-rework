@@ -3,3 +3,9 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+
+# Local Python tooling and captured sensor data
+.venv/
+__pycache__/
+*.pyc
+*.jsonl

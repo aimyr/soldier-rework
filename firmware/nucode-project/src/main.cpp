@@ -1,18 +1,66 @@
+#include <Adafruit_TinyUSB.h>
 #include <Arduino.h>
+#include "config.h"
+#include "core/log.h"
+#include "core/periodic.h"
+#include "comm/ble_link.h"
+#include "comm/serial_telemetry.h"
+#include "sensors/analog_sensors.h"
+#include "sensors/gps.h"
+#include "sensors/imu.h"
 
-// put function declarations here:
-int myFunction(int, int);
-
+namespace {
+Imu imu;
+AnalogSensors analog;
+Gps gps;
+BleLink ble;
+bool analogReady = false, bleReady = false;
+uint32_t sampleGaps = 0;
+VitalsPacket vitals{0, INT16_MIN, 0, 0};
+Periodic imuTick(IMU_PERIOD_US), vitalsTick(VITALS_PERIOD_US);
+Periodic gpsTick(GPS_PERIOD_US), retryTick(IMU_RETRY_US), statusTick(1000000);
+}
 void setup() {
-  // put your setup code here, to run once:
-  int result = myFunction(2, 3);
+  Serial.begin(SERIAL_DEBUG_BAUD);
+  bleReady = ble.begin();
+  analogReady = analog.begin();
+  imu.begin();
+  if (CFG_GPS) gps.begin();
+  LOG("[main] ready imu=%u analog=%u ble=%u\n", imu.ok(), analogReady, bleReady);
 }
-
 void loop() {
-  // put your main code here, to run repeatedly:
-}
-
-// put function definitions here:
-int myFunction(int x, int y) {
-  return x + y;
+  if (CFG_GPS) gps.poll();
+  if (retryTick.due(micros()) && !imu.ok()) imu.begin();
+  if (imuTick.due(micros())) {
+    ImuPacket packet{};
+    if (imu.read(packet)) {
+      SerialTelemetry::print(packet);
+      if (bleReady) ble.sendImu(packet);
+    }
+  }
+  if (vitalsTick.due(micros())) {
+    if (analog.snapshot(vitals, sampleGaps)) {
+      SerialTelemetry::print(vitals);
+      if (bleReady) ble.sendVitals(vitals);
+    }
+  }
+  if (CFG_GPS && gpsTick.due(micros())) {
+    GpsPacket packet{};
+    gps.snapshot(packet);
+    SerialTelemetry::print(packet);
+    if (bleReady) ble.sendGps(packet);
+  }
+  if (statusTick.due(micros())) {
+    GpsPacket position{};
+    gps.snapshot(position);
+    const bool freshAnalog = analogReady && (uint32_t)(millis() - vitals.t_ms) < 1000;
+    uint16_t flags = (imu.ok() ? 1 : 0) | (freshAnalog ? 2 : 0)
+      | ((freshAnalog && vitals.temp_c_x100 != INT16_MIN) ? 4 : 0)
+      | ((freshAnalog && vitals.bpm) ? 8 : 0)
+      | (position.fix ? 16 : 0) | (CFG_GPS ? 32 : 0);
+    StatusPacket packet{millis(), 1, flags, ble.dropped(), sampleGaps};
+    if (bleReady) ble.sendStatus(packet);
+    SerialTelemetry::print(packet);
+  }
+  delay(MAIN_IDLE_MS);
 }

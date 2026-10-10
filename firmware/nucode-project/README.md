@@ -1,6 +1,6 @@
 # NU-87 Tiny DK HUD Sensor Firmware
 
-Modular firmware for the NUCODE NU-87 Tiny DK (RTL8720DF), MPU6050, TMP36GT9Z, analog Pulse Sensor, and UART NMEA GPS. Uses the official Realtek AmebaD **3.1.9** Arduino core and **AMB26 (RTL8720DF)** target, as specified by NUCODE's start guide. The previous NU40/nRF52840 PlatformIO target is no longer active.
+Modular firmware for the NUCODE NU-87 Tiny DK (RTL8720DF), MPU6050, TMP36GT9Z, analog Pulse Sensor, and UART NMEA GPS. MPU6050 orientation uses MotionApps DMP 6.12. Uses the official Realtek AmebaD **3.1.9** Arduino core and **AMB26 (RTL8720DF)** target, as specified by NUCODE's start guide. The previous NU40/nRF52840 PlatformIO target is no longer active.
 
 ## Wiring
 
@@ -47,7 +47,7 @@ The onboard RGB LED is active-high, driven through SN74LVC3G17 buffers. No senso
 
 | Pattern | Meaning |
 |---|---|
-| Steady cyan | Boot initialization in progress |
+| Steady cyan | Boot or DMP loading/stillness stabilization |
 | One blue pulse every 2 seconds | Running, waiting for BLE |
 | Two green pulses every 2 seconds | BLE connected |
 | Three red pulses every 2 seconds | MPU6050 offline or invalid TMP36 value |
@@ -55,35 +55,51 @@ The onboard RGB LED is active-high, driven through SN74LVC3G17 buffers. No senso
 
 Faults take priority over connection status. No GPS fix or no finger contact does not cause an LED fault. Patterns are driven by the main loop, so a stalled loop cannot continue a healthy heartbeat. The vendor BLE initializer waits for stack readiness internally; a stall there leaves the boot indication on.
 
-Pulse sampling runs in its own FreeRTOS task at 500Hz, with a single owner of the ADC. TMP36 sampling is spread across time and averaged over 16 readings. Sampling gaps invalidate pulse history. GPS processing has a per-loop byte budget, checksum/range validation, and 3-second fix expiry. IMU transactions have a 5ms deadline, register read-back, data-ready checks, and retry after disconnect. MPU6050 uses +/-4g, +/-500 degrees/s, a 20Hz low-pass filter, and a 50Hz sample rate.
+Pulse sampling runs in its own FreeRTOS task at 500Hz, with a single owner of the ADC. TMP36 sampling is spread across time and averaged over 16 readings. Sampling gaps invalidate pulse history. GPS processing has a per-loop byte budget, checksum/range validation, and 3-second fix expiry. IMU transactions have a 5ms deadline, register read-back, data-ready checks, and retry after disconnect. MPU6050 uses the MotionApps 6.12 operating configuration: +/-2g, +/-2000 degrees/s, DLPF setting 1 and divider 4. The image fixes its FIFO output cadence (nominally 100Hz); the host services FIFO every loop with a 5ms minimum interval and publishes fresh snapshots at up to 50Hz. Do not change sensor ranges/divider without a compatible DMP configuration.
+
+## DMP Startup and Recovery
+
+Keep the sensor stationary during startup. The host resets the MPU6050, uploads and reads back each 16-byte firmware block, then enables DMP. Startup progresses incrementally, so GPS, ADC sampling, BLE and the LED keep running. No INT wire is required: FIFO is polled over PB21/PB20.
+
+The application withholds IMU/orientation telemetry for at least 10 seconds after DMP starts and until 100 consecutive valid packets pass a stillness check (acceleration close to 1g, low gyro output and small acceleration changes). The DMP image includes upstream's stationary runtime gyro calibration. This gate does not prove calibration: slow constant rotation can look stationary, and no absolute heading reference exists. If startup remains cyan, keep the board still and inspect the serial state.
+
+The FIFO contains 28-byte packets. Reads use two bounded 14-byte bursts, consume at most two packets per poll, retain the latest valid sample and never publish it twice. Overflow or a backlog beyond four packets resets FIFO. A partial read also resets FIFO to restore alignment. Three consecutive transfer/decode failures or more than one second without valid DMP data takes the IMU offline and triggers a fresh initialization. Reinitialization also changes the yaw reference; use status bit6 to detect it.
+
+Serial `DMP,state=...,fifo_resets=...` states are 0=offline, 1=reset wait, 2=signal reset wait, 3=image upload, 4=start, 5=settling, 6=running. The FIFO reset count includes initial startup resets. State 6 and changing QUAT records indicate valid DMP packets; they do not establish angle accuracy.
+
+Quaternions are transmitted in w/x/y/z order. The PC normalizes them and displays ZYX roll/pitch/yaw in degrees. Euler angles have a singularity near +/-90-degree pitch; use quaternions for rendering. Board-to-head mounting rotation must be applied separately. Roll/pitch are gravity-referenced, and yaw is startup-relative with possible drift. Calibration, dynamic accuracy and drift on this hardware remain to be measured.
+
+The vendored firmware version, source commit, checksum and license are recorded in [vendor provenance](src/sensors/vendor/SOURCE.md).
 
 ## Serial Debugging
 
-Open the onboard USB-UART at **9600 baud, 8N1**. Every data type is printed at **1Hz**; IMU lines require a fresh valid reading. Raw pulse values are snapshots, not the entire internal 500Hz signal. A bounded logging queue isolates slow UART writes from acquisition. On saturation, debug lines are dropped. Vendor boot/stack messages may appear separately; ROM startup can use a different baud rate.
+Open the onboard USB-UART at **9600 baud, 8N1**. Every data type, including `QUAT` orientation, is printed at **1Hz**; IMU and QUAT lines require fresh data after DMP stabilization. Raw pulse values are snapshots, not the entire internal 500Hz signal. A bounded logging queue isolates slow UART writes from acquisition. On saturation, debug lines are dropped. Vendor boot/stack messages may appear separately; ROM startup can use a different baud rate.
 
 ```text
-IMU,t_ms=1000,ax=0,ay=0,az=8192,gx=0,gy=0,gz=0
-VITALS,t_ms=1000,temp_c_x100=2500,bpm=60,pulse_raw=1800
-GPS,t_ms=1000,lat_e7=0,lon_e7=0,alt_cm=0,speed_cms=0,fix=0,sats=0
-STATUS,t_ms=1000,version=2,flags=0x2F,tx_dropped=0,sample_gaps=0
+IMU,t_ms=15000,ax=0,ay=0,az=16384,gx=0,gy=0,gz=0
+VITALS,t_ms=15000,temp_c_x100=2500,bpm=60,pulse_raw=1800
+GPS,t_ms=15000,lat_e7=0,lon_e7=0,alt_cm=0,speed_cms=0,fix=0,sats=0
+STATUS,t_ms=15000,version=3,flags=0x2F,tx_dropped=0,sample_gaps=0
+QUAT,t_ms=15000,w_q30=1073741824,x_q30=0,y_q30=0,z_q30=0
 ```
 
 9600 baud supports about 960 payload bytes/second with 8N1 framing. Printing readable IMU lines at 50Hz would exceed that limit. BLE retains its higher update rates independently.
 
-## BLE Protocol v2 and PC Receiver
+## BLE Protocol v3 and PC Receiver
 
-Device name: `NUCODE-HUD`. Protocol v2 uses a **new UUID namespace** so old LSM6DS receivers cannot silently misinterpret MPU6050 scales. Update the PC receiver together with the firmware.
+Device name: `NUCODE-HUD`. Protocol v3 uses a **new UUID namespace** so previous raw-mode receivers cannot silently misinterpret the changed MPU6050 scales. Update the PC receiver together with the firmware.
 
-Service: `76B91001-7C4D-4F21-9B63-136A2D8E507C`. Notify characteristics use the same suffix with prefixes 76B91002 (IMU), 76B91003 (vitals), 76B91004 (GPS), and 76B91005 (status). One PC connection is supported. All packets fit the mandatory BLE MTU; structs are packed and little-endian.
+Service: `76B92001-7C4D-4F21-9B63-136A2D8E507C`. Notify characteristics use the same suffix with prefixes 76B92002 (IMU), 76B92003 (vitals), 76B92004 (GPS), and 76B92005 (status), and 76B92006 (orientation). One PC connection is supported. All packets fit the mandatory BLE MTU; structs are packed and little-endian.
 
 | Packet | Rate | Python struct | Meaning |
 |---|---|---|---|
-| IMU | 50Hz target | `<I6h` | uptime ms, accel XYZ raw / 8192 = g, gyro XYZ raw / 65.5 = degrees/s |
+| IMU | 50Hz target | `<I6h` | uptime ms, accel XYZ raw / 16384 = g, gyro XYZ raw / 16.4 = degrees/s |
+| Orientation | 50Hz target | `<I4i` | uptime ms, quaternion w/x/y/z in signed Q30 (divide by 1073741824) |
 | Vitals | 5Hz | `<IhHH` | uptime ms, temperature x100 C, BPM, pulse raw 0..4095 |
 | GPS | 1Hz | `<IiiiHBB` | uptime ms, lat/lon x1e7, altitude cm, speed cm/s, fix, satellites |
-| Status | 1Hz | `<IHHII` | uptime ms, version=2, flags, local BLE failures, sample gaps |
+| Status | 1Hz | `<IHHII` | uptime ms, version=3, flags, local BLE failures, sample gaps |
 
-Temperature -32768 means invalid; BPM 0 means unavailable. Status flags: bit0 IMU online, bit1 analog fresh, bit2 temperature valid, bit3 BPM available, bit4 GPS fix, bit5 GPS enabled. GPS coordinates are invalid when fix=0. BLE delivery is best effort; the Realtek notify API does not report radio delivery, and `tx_dropped` only counts detectable local failures. Actual rates and range require hardware measurement.
+Temperature -32768 means invalid; BPM 0 means unavailable. Status flags: bit0 IMU online, bit1 analog fresh, bit2 temperature valid, bit3 BPM available, bit4 GPS fix, bit5 GPS enabled, bit6 DMP initializing/settling. GPS coordinates are invalid when fix=0. BLE delivery is best effort; the Realtek notify API does not report radio delivery, and `tx_dropped` only counts detectable local failures. Actual rates and range require hardware measurement.
 
 ```sh
 python3 -m venv .venv
@@ -99,7 +115,7 @@ The receiver validates packet lengths/version, decodes units, marks stale data, 
 sh tools/test.sh
 ```
 
-Native C++ tests use AddressSanitizer/UndefinedBehaviorSanitizer and cover timing, MPU6050 byte order, I2C failures, TMP36 conversion, pulse timing, and NMEA parsing. Python tests cover protocol scales/UUIDs and receiver disconnect/error handling. They do not establish sensor accuracy, current draw, RF reliability, or physical wiring. See [the validation record](docs/power-validation.md) for hardware evidence and remaining checks.
+Native C++ tests use AddressSanitizer/UndefinedBehaviorSanitizer and cover timing, MPU6050 byte order, I2C failures, TMP36 conversion, pulse timing, and NMEA parsing. Python tests cover protocol scales/UUIDs, quaternion decoding, and receiver disconnect/error handling. The DMP simulator additionally covers verified banked image loading, motion gating, partial FIFO packets, overflow/backlog reset, mid-packet bus failure, corruption, stale data, retries, and clock wraparound. They do not establish sensor accuracy, current draw, RF reliability, or physical wiring. See [the validation record](docs/power-validation.md) for hardware evidence and remaining checks.
 
 The unused `variants/nu40dk_nrf52840` directory is retained as historical source with its license; it is not compiled for NU-87.
 

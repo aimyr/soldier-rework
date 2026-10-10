@@ -18,9 +18,22 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(p["pulse_raw"], 4095)
         self.assertEqual(decode("vitals", struct.pack("<IhHH", 0, -25, 60, 1))["temp_c"], -0.25)
     def test_imu(self):
-        p = decode("imu", struct.pack("<I6h", 0, 8192, -8192, 0, 655, -655, 0))
+        p = decode("imu", struct.pack("<I6h", 0, 16384, -16384, 0, 164, -164, 0))
         self.assertEqual(p["acc_g"], [1, -1, 0])
         self.assertEqual(p["gyro_dps"], [10, -10, 0])
+    def test_orientation(self):
+        p = decode("orientation", struct.pack("<I4i", 7, 1073741824, 0, 0, 0))
+        self.assertEqual(p["quaternion_wxyz"], [1, 0, 0, 0])
+        self.assertEqual(p["yaw_deg"], 0)
+        p = decode("orientation", struct.pack("<I4i", 8, 759250125, 0, 0, 759250125))
+        self.assertAlmostEqual(p["yaw_deg"], 90, places=5)
+        negative = decode("orientation", struct.pack("<I4i", 8, -759250125, 0, 0, -759250125))
+        self.assertAlmostEqual(negative["yaw_deg"], p["yaw_deg"], places=5)
+        with self.assertRaises(ValueError):
+            decode("orientation", struct.pack("<I4i", 0, 0, 0, 0, 0))
+        p = decode("status", struct.pack("<IHHII", 0, 3, 64, 0, 0))
+        self.assertTrue(p["dmp_initializing"])
+        self.assertFalse(p["imu_online"])
     def test_no_fix(self):
         self.assertIsNone(decode("gps", struct.pack("<IiiiHBB", 0, 100, 200, 300, 5, 0, 0))["lat"])
     def test_uuids_match_firmware(self):

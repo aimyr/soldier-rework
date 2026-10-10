@@ -19,3 +19,8 @@ void SerialTelemetry::print(const StatusPacket& p) {
       (unsigned long)p.t_ms, p.version, p.flags,
       (unsigned long)p.tx_dropped, (unsigned long)p.sample_gaps);
 }
+
+void SerialTelemetry::print(const OrientationPacket& p) {
+  LOG("QUAT,t_ms=%lu,w_q30=%ld,x_q30=%ld,y_q30=%ld,z_q30=%ld\n",
+      (unsigned long)p.t_ms, (long)p.w, (long)p.x, (long)p.y, (long)p.z);
+}

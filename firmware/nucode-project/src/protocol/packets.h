@@ -5,12 +5,19 @@
 // Keep these definitions synchronized with the PC decoder in tools/protocol.py.
 
 // IMU packet (16 bytes)
-//  accel: ±4 g  -> 8192 LSB/g,  gyro: ±500 dps -> 65.5 LSB/(deg/s)
+//  accel: ±2 g -> 16384 LSB/g, gyro: ±2000 dps -> 16.4 LSB/(deg/s)
 struct __attribute__((packed)) ImuPacket {
   uint32_t t_ms;
   int16_t  ax, ay, az;
   int16_t  gx, gy, gz;
 };
+
+// DMP quaternion: signed Q30, w/x/y/z order. Divide by 2^30.
+struct __attribute__((packed)) OrientationPacket {
+  uint32_t t_ms;
+  int32_t w, x, y, z;
+};
+static_assert(sizeof(OrientationPacket) == 20, "OrientationPacket size");
 
 // Vitals packet (10 bytes)
 struct __attribute__((packed)) VitalsPacket {
@@ -35,8 +42,9 @@ struct __attribute__((packed)) GpsPacket {
 };
 static_assert(sizeof(GpsPacket) == 20, "GpsPacket size");
 
-// Status v2, 16 bytes. Flags: bit0 IMU online, bit1 analog task ready,
-// bit2 temperature valid, bit3 BPM available, bit4 GPS fix, bit5 GPS enabled.
+// Status v3, 16 bytes. Flags: bit0 IMU online, bit1 analog task ready,
+// bit2 temperature valid, bit3 BPM available, bit4 GPS fix, bit5 GPS enabled,
+// bit6 DMP initializing/settling.
 struct __attribute__((packed)) StatusPacket {
   uint32_t t_ms;
   uint16_t version;

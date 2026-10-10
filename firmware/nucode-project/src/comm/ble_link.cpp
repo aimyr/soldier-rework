@@ -7,13 +7,13 @@
 
 namespace {
 BLEService service(UUID_SERVICE);
-BLECharacteristic imu(UUID_IMU), vitals(UUID_VITALS), gps(UUID_GPS), status(UUID_STATUS);
-BLECharacteristic* chars[] = {&imu, &vitals, &gps, &status};
-std::atomic<bool> subscribed[4];
+BLECharacteristic imu(UUID_IMU), vitals(UUID_VITALS), gps(UUID_GPS), status(UUID_STATUS), orientation(UUID_ORIENTATION);
+BLECharacteristic* chars[] = {&imu, &vitals, &gps, &status, &orientation};
+std::atomic<bool> subscribed[5];
 uint32_t drops = 0;
 void subscription(BLECharacteristic* chr, uint8_t connection, uint16_t bits) {
   if (connection != 0) return;
-  for (unsigned i = 0; i < 4; ++i)
+  for (unsigned i = 0; i < 5; ++i)
     if (chars[i] == chr) subscribed[i].store((bits & GATT_CLIENT_CHAR_CONFIG_NOTIFY) != 0);
 }
 bool send(unsigned index, const void* data, uint8_t size) {
@@ -36,8 +36,8 @@ bool BleLink::begin() {
   advertisement.addFlags(GAP_ADTYPE_FLAGS_GENERAL | GAP_ADTYPE_FLAGS_BREDR_NOT_SUPPORTED);
   advertisement.addCompleteServices(BLEUUID(UUID_SERVICE));
   scan.addCompleteName(BLE_DEVICE_NAME);
-  const uint8_t sizes[] = {sizeof(ImuPacket), sizeof(VitalsPacket), sizeof(GpsPacket), sizeof(StatusPacket)};
-  for (unsigned i = 0; i < 4; ++i) {
+  const uint8_t sizes[] = {sizeof(ImuPacket), sizeof(VitalsPacket), sizeof(GpsPacket), sizeof(StatusPacket), sizeof(OrientationPacket)};
+  for (unsigned i = 0; i < 5; ++i) {
     chars[i]->setNotifyProperty(true);
     chars[i]->setBufferLen(sizes[i]);
     chars[i]->setCCCDCallback(subscription);
@@ -60,3 +60,5 @@ bool BleLink::sendImu(const ImuPacket& p) { return send(0, &p, sizeof(p)); }
 bool BleLink::sendVitals(const VitalsPacket& p) { return send(1, &p, sizeof(p)); }
 bool BleLink::sendGps(const GpsPacket& p) { return send(2, &p, sizeof(p)); }
 bool BleLink::sendStatus(const StatusPacket& p) { return send(3, &p, sizeof(p)); }
+
+bool BleLink::sendOrientation(const OrientationPacket& p) { return send(4, &p, sizeof(p)); }

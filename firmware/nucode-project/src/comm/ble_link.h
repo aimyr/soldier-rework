@@ -6,6 +6,7 @@ class BleLink {
 public:
   bool begin();
   bool connected() const;
+  bool sendOrientation(const OrientationPacket& p);
   bool sendImu(const ImuPacket& p);
   bool sendVitals(const VitalsPacket& p);
   bool sendStatus(const StatusPacket& p);

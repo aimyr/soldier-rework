@@ -35,13 +35,18 @@ void setup() {
 }
 void loop() {
   if (CFG_GPS) gps.poll();
-  if (retryTick.due(micros()) && !imu.ok()) imu.begin();
+  if (retryTick.due(micros()) && !imu.active()) imu.begin();
+  imu.poll();
   if (imuTick.due(micros())) {
     ImuPacket packet{};
-    if (imu.read(packet)) {
+    OrientationPacket orientation{};
+    if (imu.read(packet, orientation)) {
       static Periodic serialImu(1000000);
-      if (serialImu.due(micros())) SerialTelemetry::print(packet);
-      if (bleReady) ble.sendImu(packet);
+      if (serialImu.due(micros())) {
+        SerialTelemetry::print(packet);
+        SerialTelemetry::print(orientation);
+      }
+      if (bleReady) { ble.sendImu(packet); ble.sendOrientation(orientation); }
     }
   }
   if (vitalsTick.due(micros())) {
@@ -64,16 +69,19 @@ void loop() {
     uint16_t flags = (imu.ok() ? 1 : 0) | (freshAnalog ? 2 : 0)
       | ((freshAnalog && vitals.temp_c_x100 != INT16_MIN) ? 4 : 0)
       | ((freshAnalog && vitals.bpm) ? 8 : 0)
-      | (position.fix ? 16 : 0) | (CFG_GPS ? 32 : 0);
-    StatusPacket packet{millis(), 2, flags, ble.dropped(), sampleGaps};
+      | (position.fix ? 16 : 0) | (CFG_GPS ? 32 : 0)
+      | ((imu.active() && !imu.ok()) ? 64 : 0);
+    StatusPacket packet{millis(), 3, flags, ble.dropped(), sampleGaps};
     if (bleReady) ble.sendStatus(packet);
     SerialTelemetry::print(packet);
+    LOG("DMP,state=%u,fifo_resets=%lu\n", unsigned(imu.state()), (unsigned long)imu.fifoResets());
   }
   const uint32_t nowMs = millis();
   const bool settled = (uint32_t)(nowMs - readyMs) >= 1000;
   const bool analogStale = settled && (uint32_t)(nowMs - vitals.t_ms) >= 1000;
   StatusLed::State ledState;
   if (!bleReady || !analogReady || analogStale) ledState = StatusLed::State::Fatal;
+  else if (imu.active() && !imu.ok()) ledState = StatusLed::State::Boot;
   else if (!imu.ok() || (settled && vitals.temp_c_x100 == INT16_MIN))
     ledState = StatusLed::State::SensorFault;
   else ledState = ble.connected() ? StatusLed::State::Connected : StatusLed::State::Ready;

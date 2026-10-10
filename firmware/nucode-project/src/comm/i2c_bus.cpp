@@ -80,3 +80,12 @@ bool I2cBus::write(uint8_t address, uint8_t reg, uint8_t value) {
   const bool stopped = stop();
   return ok && stopped;
 }
+
+bool I2cBus::writeBlock(uint8_t address, uint8_t reg, const uint8_t* data, uint8_t count) {
+  if (address > 0x7F || !data || !count || count > 16) return false;
+  started_ = micros();
+  bool ok = start() && put(address << 1) && put(reg);
+  for (uint8_t i = 0; ok && i < count; ++i) ok = put(data[i]);
+  const bool stopped = stop();
+  return ok && stopped;
+}

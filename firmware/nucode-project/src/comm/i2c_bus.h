@@ -8,6 +8,7 @@ public:
   void begin();
   bool read(uint8_t address, uint8_t reg, uint8_t* data, uint8_t count);
   bool write(uint8_t address, uint8_t reg, uint8_t value);
+  bool writeBlock(uint8_t address, uint8_t reg, const uint8_t* data, uint8_t count);
 private:
   uint32_t started_ = 0;
   bool clockHigh();

@@ -44,7 +44,7 @@ async def receive(args, output):
                 return on_packet
             async with BleakClient(device, disconnected_callback=lambda _: loop.call_soon_threadsafe(disconnected.set)) as client:
                 if client.services.get_service(SERVICE) is None:
-                    raise ValueError("보드의 서비스 UUID가 프로토콜 v2과 다릅니다.")
+                    raise ValueError("보드의 서비스 UUID가 프로토콜 v3과 다릅니다.")
                 for kind, uuid in UUIDS.items():
                     await client.start_notify(uuid, callback(kind))
                 print(f"Connected: {device.address}", file=sys.stderr)

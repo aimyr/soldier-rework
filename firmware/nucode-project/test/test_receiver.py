@@ -28,7 +28,7 @@ class ReceiverTests(unittest.IsolatedAsyncioTestCase):
             async def start_notify(self, uuid, callback):
                 subscriptions.append(uuid)
                 if uuid == UUIDS["status"]:
-                    callback(None, b"bad" if bad else struct.pack("<IHHII", 100, 2, 63, 0, 0))
+                    callback(None, b"bad" if bad else struct.pack("<IHHII", 100, 3, 63, 0, 0))
                     self.callback(self)
         module = types.ModuleType("bleak")
         module.BleakClient, module.BleakScanner = Client, Scanner
@@ -45,7 +45,7 @@ class ReceiverTests(unittest.IsolatedAsyncioTestCase):
     async def test_disconnect_reconnect_and_record(self):
         subscriptions, text = await self.run_session()
         self.assertEqual(subscriptions, list(UUIDS.values()))
-        self.assertIn('"version": 2', text)
+        self.assertIn('"version": 3', text)
         self.assertIn('"received_at":', text)
 
     async def test_bad_packet_fails_without_reconnect_loop(self):

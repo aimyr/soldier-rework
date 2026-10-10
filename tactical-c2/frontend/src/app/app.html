@@ -1,0 +1,150 @@
+@let st = c2.state();
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark"></span>
+    <div>
+      <div class="brand-title">SQUAD C2 · COP</div>
+      <div class="brand-sub">Offline edge terminal</div>
+    </div>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><span class="kpi-label">Mission</span><span class="kpi-value mono">{{ clock() }}</span></div>
+    <div class="kpi"><span class="kpi-label">Flagged</span>
+      <span class="kpi-value mono" [class.hot]="c2.flagged() > 0">{{ c2.flagged() }}/{{ c2.soldiers().length }}</span></div>
+    @if (st?.emission; as em) {
+      <div class="kpi" title="Share of sensor samples that never went on air">
+        <span class="kpi-label">Radio silence</span>
+        <span class="kpi-value mono">{{ em.radio_silence_pct | number: '1.1-1' }}%</span>
+      </div>
+      <div class="kpi"><span class="kpi-label">On air</span>
+        <span class="kpi-value mono">{{ em.packets_on_air }} <small>pkts</small></span></div>
+    }
+  </div>
+
+  <div class="status">
+    <span class="chip" [class.chip-ok]="c2.connected()" [class.chip-bad]="!c2.connected()">
+      {{ c2.connected() ? 'LINK' : 'NO LINK' }}</span>
+    <span class="chip">{{ st?.source === 'serial' ? 'MESH GATEWAY' : 'SIMULATOR' }}</span>
+    <span class="chip" [class.chip-ok]="st?.llm?.reachable === true" [class.chip-warn]="st?.llm?.reachable === false">
+      sLLM {{ st?.llm?.reachable === true ? 'ONLINE' : st?.llm?.reachable === false ? 'FALLBACK' : 'IDLE' }}</span>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="panel map-panel">
+    <div class="panel-head">
+      <h2>Common Operational Picture</h2>
+      <div class="legend">
+        <span><i class="sw sw-ok"></i>OK</span><span><i class="sw sw-watch"></i>Watch</span>
+        <span><i class="sw sw-warn"></i>Warn</span><span><i class="sw sw-crit"></i>Critical</span>
+        <span><i class="sw sw-unk"></i>Unknown</span>
+      </div>
+    </div>
+    <app-cop-map class="map" [soldiers]="c2.soldiers()" [events]="st?.squad_events ?? []"
+                 [missionTime]="st?.mission_time_s ?? 0" [size]="st?.grid?.size_m ?? 300" [n]="st?.grid?.n ?? 3"
+                 [selected]="selected()" (pick)="toggle($event)" />
+    <div class="map-foot mono">Grid 100 m · positions are node PDR estimates (no GNSS) · CP = commander</div>
+  </section>
+
+  <section class="panel briefing-panel">
+    <div class="panel-head">
+      <h2>AI Briefing</h2>
+      <button class="btn btn-primary" (click)="c2.briefNow()" [disabled]="c2.briefingBusy()">
+        {{ c2.briefingBusy() ? 'Generating…' : 'Brief now' }}</button>
+    </div>
+    @if (c2.latestBriefing(); as b) {
+      <p class="briefing-text">{{ b.text }}</p>
+      <div class="briefing-meta mono">
+        <span class="tag" [class.tag-llm]="b.source === 'llm'">{{ b.source === 'llm' ? b.model : 'rule template' }}</span>
+        <span>{{ b.trigger }}</span><span>T+{{ mmss(b.mission_time_s) }}</span><span>{{ b.latency_ms }} ms</span>
+      </div>
+      @if (b.note) { <div class="briefing-note">{{ b.note }}</div> }
+    } @else {
+      <p class="muted">No briefing yet. A briefing is generated automatically on critical alerts and squad-level events.</p>
+    }
+
+    @if (st?.squad_events?.length) {
+      <h3>Squad-level events</h3>
+      <ul class="events">
+        @for (e of st!.squad_events.slice(0, 4); track e.t_s + e.sector + e.kind) {
+          <li [class.ev-contact]="e.kind === 'POSSIBLE_CONTACT'" [class.ev-hazard]="e.kind === 'HAZARD_AREA'">
+            <b>{{ e.kind === 'POSSIBLE_CONTACT' ? 'Possible contact' : 'Hazard area' }} · {{ e.sector }}</b>
+            <span>{{ e.detail }}</span>
+            <span class="mono muted">T+{{ mmss(e.t_s) }}</span>
+          </li>
+        }
+      </ul>
+    }
+  </section>
+
+  <section class="panel roster-panel">
+    <div class="panel-head"><h2>Squad</h2><span class="muted mono">{{ st?.stats?.packets ?? 0 }} pkts · {{ st?.stats?.bytes ?? 0 }} B</span></div>
+    <div class="roster">
+      @for (s of roster(); track s.soldier_id) {
+        <article class="card" [attr.data-sev]="s.severity" [class.selected]="s.soldier_id === selected()"
+                 (click)="toggle(s.soldier_id)">
+          <div class="card-top">
+            <span class="callsign">{{ s.callsign }}</span>
+            <span class="sev" [attr.data-sev]="s.severity">{{ s.severity }}</span>
+          </div>
+          <div class="card-line">{{ s.severity === 'UNKNOWN' ? 'No check-in received' : s.active_code ? s.active_label : 'Nominal' }}</div>
+          <div class="vitals mono">
+            <span title="Heart rate">♥ {{ s.hr_bpm ?? '–' }}</span>
+            <span title="Skin temperature">{{ s.skin_temp_c !== null ? (s.skin_temp_c | number: '1.1-1') + '°' : '–' }}</span>
+            <span title="Estimated PSI (skin temperature)">PSI {{ s.psi_est ?? '–' }}</span>
+            <span title="Sector">{{ s.sector ?? '–' }}</span>
+          </div>
+          @if (s.severity === 'CRITICAL' || s.severity === 'WARN') {
+            @if (!s.acked) {
+              <button class="btn btn-small" (click)="$event.stopPropagation(); c2.ack(s.soldier_id)">Acknowledge</button>
+            } @else {
+              <span class="muted small">Acknowledged</span>
+            }
+          }
+        </article>
+      }
+    </div>
+
+    @if (focus(); as f) {
+      <div class="detail">
+        <h3>{{ f.callsign }} detail</h3>
+        <dl class="mono">
+          <dt>Assessment</dt><dd>{{ f.interpretation }}</dd>
+          <dt>Baseline HR / temp</dt><dd>{{ f.baseline.hr_bpm ?? '–' }} bpm / {{ f.baseline.skin_temp_c ?? '–' }}°C</dd>
+          <dt>Activity</dt><dd>{{ f.activity ?? '–' }} / 255</dd>
+          <dt>Gas</dt><dd>{{ f.gas ?? '–' }} / 255</dd>
+          <dt>Position (PDR)</dt><dd>{{ f.x_m ?? '–' }}, {{ f.y_m ?? '–' }} m</dd>
+          <dt>Relay hops / RSSI</dt><dd>{{ f.hops ?? '–' }} / {{ f.rssi ?? '–' }} dBm</dd>
+          <dt>Last seen</dt><dd>{{ f.seconds_since_seen ?? '–' }} s ago · {{ f.packets }} pkts</dd>
+        </dl>
+      </div>
+    }
+  </section>
+
+  <section class="panel alerts-panel">
+    <div class="panel-head"><h2>Alert log</h2><span class="muted mono">{{ st?.stats?.alerts ?? 0 }} alerts</span></div>
+    <ol class="alerts">
+      @for (a of (st?.alerts ?? []).slice(0, 30); track a.t_s + '-' + a.soldier_id + '-' + a.code) {
+        <li [attr.data-sev]="a.severity">
+          <span class="mono muted">{{ mmss(a.t_s) }}</span>
+          <span class="mono callsign-sm">{{ a.callsign }}</span>
+          <span class="alert-label">{{ a.label }}</span>
+          <span class="mono muted">{{ a.sector }} · HR {{ a.hr_bpm }}</span>
+        </li>
+      } @empty {
+        <li class="muted">Radio silent. Nodes transmit only on anomalies, manual reports, and randomized check-ins.</li>
+      }
+    </ol>
+  </section>
+</main>
+
+@if (st?.source === 'sim') {
+  <footer class="controls">
+    <span class="controls-label">Demo scenarios</span>
+    @for (sc of scenarios; track sc.id) {
+      <button class="btn" (click)="c2.scenario(sc.id)">{{ sc.label }}</button>
+    }
+    <button class="btn btn-ghost" (click)="c2.scenario('reset'); selected.set(null)">Reset</button>
+  </footer>
+}
